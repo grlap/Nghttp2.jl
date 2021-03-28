@@ -1,6 +1,6 @@
 name = "Nghttp2"
 uuid = "d59d01c2-cedb-43fa-bb24-e6eaeb189957"
-authors = ["Greg <grlap@microsoft.com>"]
+authors = ["Greg Lapinski <grzegorz.lapinski@live.com>"]
 version = "0.1.0"
 
 [deps]
