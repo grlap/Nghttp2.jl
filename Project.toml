@@ -1,0 +1,11 @@
+name = "Nghttp2"
+uuid = "d59d01c2-cedb-43fa-bb24-e6eaeb189957"
+authors = ["Greg <grlap@microsoft.com>"]
+version = "0.1.0"
+
+[deps]
+BitFlags = "d1d4a3ce-64b1-5f1a-9ba4-7e7e69966f35"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+OpenSSL = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+nghttp2_jll = "8e850ede-7688-5339-a07c-302acd2aaf8d"
