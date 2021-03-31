@@ -3,7 +3,47 @@ using OpenSSL
 using Nghttp2
 using Test
 
-@teset "Nghttp2" begin
+# Verifies calling into Nghttp library.
+@testset "Nghttp2 " begin
+    info = nghttp2_version()
+    @test unsafe_string(info.proto_str) == "h2"
+end
+
+# Verifies creating unsecured Http2 connection
+@testset "Http2 Connection" begin
+    tcp_connection = connect("www.nghttp2.org", 80)
+
+    client_session = Nghttp2.open(tcp_connection)
+
+    # TODO empty request
+    io = IOBuffer()
+    stream_id1 = Nghttp2.submit_request(
+        client_session.session,
+        io,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "http",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+            "user-agent" => "curl/7.75.0"
+        ])
+
+    @test stream_id1 != 0
+
+    recv_stream_id1, stream1 = Nghttp2.recv!(client_session.session)
+    recv_stream_id2, stream2 = Nghttp2.recv!(client_session.session)
+
+    println("=== [1]")
+    #println("$(String(read(stream1.buffer)))")
+    println("=== [2]")
+    #println("$(String(read(stream2.buffer)))")
+    # #TODO pinning is wrong, if removed it is crashing
+    #@show recv_stream_id1, stream1
+    #@show recv_stream_id2, stream2
+end
+
+@testset "Https2 Connection" begin
 
 end
 
@@ -147,4 +187,4 @@ end
 # Redesign API
 # Http2.Stream <: IO
 
-http_test()
+##http_test()

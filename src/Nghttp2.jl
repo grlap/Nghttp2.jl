@@ -33,7 +33,7 @@ OpenSSL:
 
 module Nghttp2
 
-export send, recv!, submit_request, request
+export send, recv!, submit_request, request, nghttp2_version
 
 using nghttp2_jll
 using BitFlags
@@ -423,9 +423,7 @@ const SessionIdCounter = Threads.Atomic{Int64}(1)
     The Session object must be pinned.
 """
 function session_from_data(user_data::Ptr{Cvoid})::Option{Session}
-    println("||==>session_from_data: $(user_data)")
     session::Session = unsafe_pointer_to_objref(user_data)
-
     return session
 end
 
@@ -434,7 +432,6 @@ end
     The Session object must be pinned.
 """
 function session_set_data(session::Session)
-    println("||==>session_set_data: $(pointer_from_objref(session))")
     ccall((:nghttp2_session_set_user_data, libnghttp2),
         Cvoid,
         (Nghttp2Session, Ptr{Cvoid},),
@@ -525,7 +522,7 @@ end
 
 function nghttp2_session_callbacks_del(nghttp2_callbacks::Nghttp2SessionCallbacks)
     ccall((:nghttp2_session_callbacks_del, libnghttp2), Cvoid, (Nghttp2SessionCallbacks,), nghttp2_callbacks)
-    callbacks.ptr = C_NULL
+    nghttp2_callbacks.ptr = C_NULL
 end
 
 """
@@ -538,18 +535,19 @@ function server_session_new(socket::TCPSocket)::Session
 
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
-    callbacks = nghttp2_session_callbacks_new()
+    nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
     result = ccall(
         (:nghttp2_session_server_new, libnghttp2),
         Cint,
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
         nghttp2_session,
-        callbacks,
+        nghttp2_session_callbacks,
         Ptr{Cvoid}(session_id))
 
     session = Session(socket, nghttp2_session, session_id)
 
+    nghttp2_session_callbacks_del(nghttp2_session_callbacks)
     return session
 end
 
@@ -563,17 +561,19 @@ function client_session_new(io::IO)::Session
 
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
-    callbacks = nghttp2_session_callbacks_new()
+    nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
     result = ccall(
         (:nghttp2_session_client_new, libnghttp2),
         Cint,
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
         nghttp2_session,
-        callbacks,
+        nghttp2_session_callbacks,
         Ptr{Cvoid}(session_id))
 
     session = Session(io, nghttp2_session, session_id)
+
+    nghttp2_session_callbacks_del(nghttp2_session_callbacks)
 
     return session
 end
@@ -608,7 +608,6 @@ function nghttp2_session_send(nghttp2_session::Nghttp2Session)
 end
 
 function nghttp2_session_submit_settings(nghttp2_session::Nghttp2Session, settings::Vector{SettingsEntry})
-    println("nghttp2_session_submit_settings $(settings)")
     result = ccall((:nghttp2_submit_settings, libnghttp2),
         Cint,
         (Nghttp2Session, UInt8, Ptr{Cvoid}, Csize_t),
@@ -617,7 +616,6 @@ function nghttp2_session_submit_settings(nghttp2_session::Nghttp2Session, settin
         pointer(settings),
         length(settings))
 
-    println("nghttp2_session_submit_settings: $(result)")
     return result
 end
 
@@ -634,6 +632,7 @@ end
 
 function nghttp2_session_recv(nghttp2_session::Nghttp2Session)
     result = ccall((:nghttp2_session_recv, libnghttp2), Cint, (Nghttp2Session,), nghttp2_session)
+
     return result
 end
 
@@ -646,7 +645,6 @@ function nghttp2_submit_window_update(nghttp2_session::Nghttp2Session, stream_id
         stream_id,
         window_size_increment)
 
-    println("nghttp2_submit_window_update $(stream_id) $(window_size_increment) $(result)")
     return result
 end
 
@@ -690,8 +688,6 @@ Base.show(io::IO, nv_pair::NVPair) =
     Callback implementation.
 """
 function on_recv_callback(nghttp2_session::Nghttp2Session, buf::Ptr{UInt8}, len::Csize_t, flags::Cint, user_data::Ptr{Cvoid})::Cssize_t
-    println("on_recv_callback")
-
     # Get the server session object.
     session = session_from_data(user_data)
     @show session.id
@@ -703,7 +699,6 @@ end
 function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2Frame, user_data::Ptr{Cvoid})::Cint
     frame_header = unsafe_load(Ptr{Nghttp2FrameHeader}(frame.ptr))
 
-    println("on_frame_recv_callback $(frame_header)")
     # https://nghttp2.org/documentation/types.html#c.nghttp2_on_frame_recv_callback
 
     result::Cint = 0
@@ -715,7 +710,6 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
     session = session_from_data(user_data)
 
     frame_header = unsafe_load(Ptr{Nghttp2FrameHeader}(frame.ptr))
-    println("on_begin_headers_callback: $(Nghttp2FrameType(frame_header.type)) stream_id:$(frame_header.stream_id)")
 
     add_new_stream = false
 
@@ -738,7 +732,6 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
     end
 
     if (add_new_stream)
-        println(" adding new stream")
         # Create a new stream.
         session.recv_streams[frame_header.stream_id] = Stream(frame_header.stream_id)
     end
@@ -769,8 +762,6 @@ function on_header_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2
 end
 
 function on_data_chunk_recv_callback(nghttp2_session::Nghttp2Session, flags::UInt8, stream_id::Cint, buf::Ptr{UInt8}, len::Csize_t, user_data::Ptr{Cvoid})::Cint
-    println("on_data_chunk_recv_callback stream_id:$(stream_id)")
-
     # Get the server session object.
     session = session_from_data(user_data)
 
@@ -822,8 +813,6 @@ function on_error_callback(nghttp2_session::Nghttp2Session, lib_error_code::Nght
 end
 
 function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, buf::Ptr{UInt8}, buf_length::Csize_t, data_flags::Ptr{UInt32}, data_source::Ptr{Ptr{IOBuffer}}, user_data::Ptr{Cvoid})
-    println("on_data_source_read_callback $(stream_id) $(buf):$(length) $(data_flags) $(data_source) $(user_data)")
-
     data_source = unsafe_load(data_source)
     data_source = unsafe_pointer_to_objref(data_source)
 
@@ -854,8 +843,6 @@ end
 function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})
     # Get the server session object.
     session = session_from_data(user_data)
-
-    println(">> on_stream_close_callback session:$(session.session_id) stream:$(stream_id)")
 
     # Stream was closed.
     enqueue!(session.recv_streams_id, stream_id)
@@ -893,14 +880,14 @@ function has_errors(session::Session)
     end
 end
 
+"""
+    Receive from the session.
+"""
 function recv!(session::Session)
     while isempty(session.recv_streams_id) && !eof(session.io) && !has_errors(session)
-        println("recv! has bytes")
         available_bytes = bytesavailable(session.io)
 
-        println("==> nghttp2_read -> $(available_bytes) bytes to read")
         input_data = read(session.io, available_bytes)
-        println("<== nghttp2_read <- $(length(input_data)) bytes read")
 
         GC.@preserve session begin
             session_set_data(session)
@@ -933,7 +920,7 @@ function recv!(session::Session)
 end
 
 """
-    Send data to Http2 server session.
+    Send data via Http2 session.
 """
 function Sockets.send(
     session::Session,
@@ -952,8 +939,8 @@ function Sockets.send(
 
         GC.@preserve data_source begin
             data_provider = DataProvider(pointer_from_objref(data_source), on_data_source_read_callback_ptr)
-            GC.@preserve data_provider begin
 
+            GC.@preserve data_provider begin
                 # headers and data
                 #
                 result = ccall((:nghttp2_submit_response, libnghttp2),
@@ -973,8 +960,6 @@ function Sockets.send(
     # Release headers and trailers after sending the frame.
     finalize(headers)
     finalize(trailers)
-
-    println("done sending:")
 end
 
 function submit_request(session::Session, send_buffer::IOBuffer, header::StringPairs = StringPairs(), trailer::StringPairs = StringPairs())
@@ -1006,7 +991,6 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
                 if (stream_id < 0)
                     throw("error")
                 end
-                println("submitted request: $(stream_id)")
 
                 result = nghttp2_session_send(session.nghttp2_session)
             end
@@ -1016,9 +1000,6 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
     # Release headers and trailers after sending the frame.
     finalize(headers)
     finalize(trailers)
-
-    println("done sending:")
-
     return stream_id
 end
 
@@ -1091,7 +1072,7 @@ end
 const NGHTTP2_CALLBACKS = Ref{Nghttp2Callbacks}()
 
 """
-    Initialize module.
+    Initialize the module.
 """
 function __init__()
     println("$(@__MODULE__)::__init")
@@ -1114,4 +1095,4 @@ const gRPC_Default_Request = [
     "user-agent" => "grpc-dotnet/2.29.0.0",
     "grpc-accept-encoding" => "identity,gzip"]
 
-end # module Ngttp2
+end # module Nghttp2
