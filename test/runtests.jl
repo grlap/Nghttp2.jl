@@ -44,7 +44,69 @@ end
 end
 
 @testset "Https2 Connection" begin
+cs = connect("nghttp2.org", 443)
 
+    ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
+    result = OpenSSL.set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION | OpenSSL.SSL_OP_NO_TLSv1_2)
+    result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
+
+    bio_read_write = OpenSSL.BIO(cs)
+
+    ssl = OpenSSL.SSL(ssl_ctx, bio_read_write, bio_read_write)
+    @show result = OpenSSL.connect(ssl)
+    @show OpenSSL.get_error()
+
+    # Create SSL stream.
+    ssl_stream = SSLStream(ssl)
+
+    #socket = connect("www.nghttp2.org", 80)
+    #@show socket
+
+    cs = Nghttp2.open(ssl_stream)
+
+    iob = IOBuffer()
+    @show stream_id1 = Nghttp2.submit_request(
+        cs.session, iob,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "https",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+            "user-agent" => "curl/7.75.0"
+        ])
+
+    recv_stream_id1, stream1 = Nghttp2.recv!(cs.session)
+    recv_stream_id2, stream2 = Nghttp2.recv!(cs.session)
+
+    println("=== [1]")
+    println("$(String(read(stream1.buffer)))")
+    println("=== [2]")
+    println("$(String(read(stream2.buffer)))")
+    # #TODO pinning is wrong, if removed it is crashing
+    #@show recv_stream_id1, stream1
+    #@show recv_stream_id2, stream2
+
+    """
+    @show stream_id2 = Http2.submit_request(
+        cs.session, iob,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "http",
+            ":authority" => "www.nghttp2.org",
+            "user-agent" => "curl/7.75.0",
+            "accept" => "text/html"
+        ])
+
+    @show recv_stream_id2, stream2 = Http2.recv!(cs.session)
+    """
+    # TODO hack, avoid gc cleanup
+    ssl_ctx
+
+#    @show recv_stream_id3, stream3 = Http2.recv!(cs.session)
+#    @show recv_stream_id4, stream4 = Http2.recv!(cs.session)
+#    @show recv_stream_id5, stream5 = Http2.recv!(cs.session)
 end
 
 function test_client()
@@ -107,69 +169,7 @@ end
 function http_test()
     # /opt/homebrew/opt/curl/bin/curl --http2 --http2-prior-knowledge -i http://www.nghttp2.org
 
-    cs = connect("nghttp2.org", 443)
 
-    ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
-    result = OpenSSL.set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION | OpenSSL.SSL_OP_NO_TLSv1_2)
-    result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
-
-    bio_read_write = OpenSSL.BIO(cs)
-
-    ssl = OpenSSL.SSL(ssl_ctx, bio_read_write, bio_read_write)
-    @show result = OpenSSL.connect(ssl)
-    @show OpenSSL.get_error()
-
-    # Create SSL stream.
-    ssl_stream = SSLStream(ssl)
-
-    #socket = connect("www.nghttp2.org", 80)
-    #@show socket
-
-    cs = Nghttp2.open(ssl_stream)
-    
-    iob = IOBuffer()
-    @show stream_id1 = Nghttp2.submit_request(
-        cs.session, iob,
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "https",
-            ":authority" => "www.nghttp2.org",
-            "accept" => "*/*",
-            "user-agent" => "curl/7.75.0"
-        ])
-    
-    recv_stream_id1, stream1 = Nghttp2.recv!(cs.session)
-    recv_stream_id2, stream2 = Nghttp2.recv!(cs.session)
-
-    println("=== [1]")
-    println("$(String(read(stream1.buffer)))")
-    println("=== [2]")
-    println("$(String(read(stream2.buffer)))")
-    # #TODO pinning is wrong, if removed it is crashing
-    #@show recv_stream_id1, stream1
-    #@show recv_stream_id2, stream2
-
-    """
-    @show stream_id2 = Http2.submit_request(
-        cs.session, iob,
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "http",
-            ":authority" => "www.nghttp2.org",
-            "user-agent" => "curl/7.75.0",
-            "accept" => "text/html"
-        ])
-
-    @show recv_stream_id2, stream2 = Http2.recv!(cs.session)
-    """
-    # TODO hack, avoid gc cleanup
-    ssl_ctx
-
-#    @show recv_stream_id3, stream3 = Http2.recv!(cs.session)
-#    @show recv_stream_id4, stream4 = Http2.recv!(cs.session)
-#    @show recv_stream_id5, stream5 = Http2.recv!(cs.session)
 end
 #test_client()
 
@@ -187,4 +187,3 @@ end
 # Redesign API
 # Http2.Stream <: IO
 
-##http_test()
