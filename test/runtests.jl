@@ -1,6 +1,11 @@
 using Sockets
 using OpenSSL
 using Nghttp2
+using Test
+
+@teset "Nghttp2" begin
+
+end
 
 function test_client()
     socket = connect("localhost", 5000)
