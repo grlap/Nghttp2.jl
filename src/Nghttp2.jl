@@ -422,7 +422,7 @@ const SessionIdCounter = Threads.Atomic{Int64}(1)
     Retrieves the Session object from the nghttp2_session data.
     The Session object must be pinned.
 """
-function session_from_data(user_data::Ptr{Cvoid})::Option{Session}
+function session_from_data(user_data::Ptr{Cvoid})::Session
     session::Session = unsafe_pointer_to_objref(user_data)
     return session
 end
@@ -440,7 +440,7 @@ function session_set_data(session::Session)
 end
 
 """
-    Creates the instance of Nghttp2 options.
+    Creates an instance of Nghttp2 options.
 """
 function nghttp2_option_new()::Nghttp2Option
     nghttp2_option = Nghttp2Option(C_NULL)

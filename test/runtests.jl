@@ -51,13 +51,13 @@ cs = connect("nghttp2.org", 443)
     result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
 
     bio_read_write = OpenSSL.BIO(cs)
+    bio_stream = OpenSSL.BIOStream(bio_read_write, cs)
+    ssl_stream = SSLStream(ssl_ctx, bio_stream, bio_stream)
 
-    ssl = OpenSSL.SSL(ssl_ctx, bio_read_write, bio_read_write)
-    @show result = OpenSSL.connect(ssl)
+    # TODO expose connect
+    @show result = OpenSSL.connect(ssl_stream)
+
     @show OpenSSL.get_error()
-
-    # Create SSL stream.
-    ssl_stream = SSLStream(ssl)
 
     #socket = connect("www.nghttp2.org", 80)
     #@show socket
