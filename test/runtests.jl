@@ -50,12 +50,12 @@ cs = connect("nghttp2.org", 443)
     result = OpenSSL.set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION | OpenSSL.SSL_OP_NO_TLSv1_2)
     result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
 
-    bio_read_write = OpenSSL.BIO(cs)
-    bio_stream = OpenSSL.BIOStream(bio_read_write, cs)
+    bio_stream = OpenSSL.BIOStream(cs)
     ssl_stream = SSLStream(ssl_ctx, bio_stream, bio_stream)
 
     # TODO expose connect
-    @show result = OpenSSL.connect(ssl_stream)
+    result = OpenSSL.connect(ssl_stream)
+    @show result
 
     @show OpenSSL.get_error()
 
@@ -101,9 +101,6 @@ cs = connect("nghttp2.org", 443)
 
     @show recv_stream_id2, stream2 = Http2.recv!(cs.session)
     """
-    # TODO hack, avoid gc cleanup
-    ssl_ctx
-
 #    @show recv_stream_id3, stream3 = Http2.recv!(cs.session)
 #    @show recv_stream_id4, stream4 = Http2.recv!(cs.session)
 #    @show recv_stream_id5, stream5 = Http2.recv!(cs.session)
