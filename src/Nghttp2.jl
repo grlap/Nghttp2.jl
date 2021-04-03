@@ -364,19 +364,8 @@ struct Nghttp2Info
     proto_str::Cstring
 end
 
-"""
-    Library definition.
-"""
-struct Stream
-    stream_id::Int32
-    buffer::IOBuffer
-    headers::Dict{String, String}
-
-    Stream(stream_id::Int32) = new(stream_id, IOBuffer(), Dict{String, String}())
-end
-
 mutable struct DataSource
-    send_buffer::IOBuffer
+    send_stream::IOBuffer
     trailer::NVPairs
 end
 
@@ -394,6 +383,17 @@ mutable struct Http2ProtocolException <: Exception
 end
 
 """
+    Library definition.
+"""
+struct Stream
+    stream_id::Int32
+    buffer::IOBuffer
+    headers::Dict{String, String}
+
+    Stream(stream_id::Int32) = new(stream_id, IOBuffer(), Dict{String, String}())
+end
+
+"""
     Http2 session.
 """
 mutable struct Session
@@ -405,8 +405,14 @@ mutable struct Session
     lock::ReentrantLock
     exception::Option{Exception}
 
-    Session(io::IO, nghttp2_session::Nghttp2Session, session_id::Int64) =
-        new(io, nghttp2_session, session_id, Dict{Int32, Stream}(), Queue{Int32}(), ReentrantLock(), nothing)
+    Session(io::IO, nghttp2_session::Nghttp2Session) =
+        new(io,
+            nghttp2_session,
+            Threads.atomic_add!(SessionIdCounter, 1),
+            Dict{Int32, Stream}(),
+            Queue{Int32}(),
+            ReentrantLock(),
+            nothing)
 end
 
 """
@@ -531,8 +537,6 @@ end
     Creates a new server session and stores the session object in the lookup dictionary.
 """
 function server_session_new(socket::TCPSocket)::Session
-    session_id::Int64 = Threads.atomic_add!(SessionIdCounter, 1)
-
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
@@ -543,9 +547,9 @@ function server_session_new(socket::TCPSocket)::Session
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
         nghttp2_session,
         nghttp2_session_callbacks,
-        Ptr{Cvoid}(session_id))
+        C_NULL)
 
-    session = Session(socket, nghttp2_session, session_id)
+    session = Session(socket, nghttp2_session)
 
     nghttp2_session_callbacks_del(nghttp2_session_callbacks)
     return session
@@ -557,8 +561,6 @@ end
     Creates a new client session.
 """
 function client_session_new(io::IO)::Session
-    session_id::Int64 = Threads.atomic_add!(SessionIdCounter, 1)
-
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
@@ -569,9 +571,9 @@ function client_session_new(io::IO)::Session
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
         nghttp2_session,
         nghttp2_session_callbacks,
-        Ptr{Cvoid}(session_id))
+        C_NULL)
 
-    session = Session(io, nghttp2_session, session_id)
+    session = Session(io, nghttp2_session)
 
     nghttp2_session_callbacks_del(nghttp2_session_callbacks)
 
@@ -785,11 +787,12 @@ function on_send_callback(nghttp2_session::Nghttp2Session, data::Ptr{UInt8}, len
     session = session_from_data(user_data)
 
     # Copy send data to the buffer.
-    send_buf = Vector{UInt8}(undef, length)
+    out_buffer = Vector{UInt8}(undef, length)
 
-    GC.@preserve send_buf unsafe_copyto!(pointer(send_buf), data, length)
+    GC.@preserve out_buffer unsafe_copyto!(pointer(out_buffer), data, length)
 
-    write(session.io, send_buf)
+    #TODO try/catch, send failure
+    write(session.io, out_buffer)
 
     return length
 end
@@ -812,21 +815,42 @@ function on_error_callback(nghttp2_session::Nghttp2Session, lib_error_code::Nght
     return result
 end
 
-function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, buf::Ptr{UInt8}, buf_length::Csize_t, data_flags::Ptr{UInt32}, data_source::Ptr{Ptr{IOBuffer}}, user_data::Ptr{Cvoid})
+function on_data_source_read_callback(
+    nghttp2_session::Nghttp2Session,
+    stream_id::Cint,
+    buf::Ptr{UInt8},
+    buf_length::Csize_t,
+    data_flags::Ptr{UInt32},
+    data_source::Ptr{Ptr{IOBuffer}},
+    user_data::Ptr{Cvoid})
     data_source = unsafe_load(data_source)
     data_source = unsafe_pointer_to_objref(data_source)
 
-    data_buffer = read(data_source.send_buffer)
+    #TODO, ensure buf_length
+    in_buffer = read(data_source.send_stream, buf_length)
+    in_length = length(in_buffer)
+    println("on_data_source_read_callback $(buf_length) $(in_length)")
 
-    GC.@preserve data_buffer unsafe_copyto!(buf, pointer(data_buffer), length(data_buffer))
+    GC.@preserve in_buffer unsafe_copyto!(buf, pointer(in_buffer), in_length)
+
+    #TODO is it end of send_stream
+    source_stream_eof = eof(data_source.send_stream)
+    source_has_trailer = length(data_source.trailer) != 0
+
+    println("|---> on_data_source_read_callback: is_source_eof $(source_stream_eof)")
 
     # #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
     #unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM))
-    unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF))
 
-    if length(data_source.trailer) != 0
+    send_data_flags::Nghttp2DataFlags = NGHTTP2_DATA_FLAG_NONE
+    if source_stream_eof
+        send_data_flags |= NGHTTP2_DATA_FLAG_EOF
+    end
+
+    if source_has_trailer
+        send_data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM
+
         # Submit the trailer.
-        #
         result = ccall((:nghttp2_submit_trailer, libnghttp2),
             Cint,
             (Nghttp2Session, Int32, Ptr{Cvoid}, Csize_t),
@@ -836,7 +860,9 @@ function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id
             length(data_source.trailer))
     end
 
-    result::Cssize_t = length(data_buffer)
+    unsafe_store!(data_flags, UInt32(send_data_flags))
+
+    result::Cssize_t = in_length
     return result
 end
 
@@ -849,6 +875,44 @@ function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Ci
 
     result::Cint = 0
     return result
+end
+
+"""
+    Nghttp callbacks.
+"""
+struct Nghttp2Callbacks
+    on_recv_callback_ptr::Ptr{Nothing}
+    on_frame_recv_callback_ptr::Ptr{Nothing}
+    on_begin_headers_callback_ptr::Ptr{Nothing}
+    on_header_recv_callback_ptr::Ptr{Nothing}
+    on_data_chunk_recv_callback_ptr::Ptr{Nothing}
+    on_send_callback_ptr::Ptr{Nothing}
+    on_error_callback_ptr::Ptr{Nothing}
+    on_data_source_read_callback_ptr::Ptr{Nothing}
+    on_stream_close_callback_ptr::Ptr{Nothing}
+
+    function Nghttp2Callbacks()
+        on_recv_callback_ptr = @cfunction on_recv_callback Cssize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
+        on_frame_recv_callback_ptr = @cfunction on_frame_recv_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{Cvoid})
+        on_begin_headers_callback_ptr = @cfunction on_begin_headers_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{Cvoid})
+        on_header_recv_callback_ptr = @cfunction on_header_recv_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{UInt8}, Csize_t, Ptr{UInt8}, Csize_t, UInt8, Ptr{Cvoid})
+        on_data_chunk_recv_callback_ptr = @cfunction on_data_chunk_recv_callback Cint (Nghttp2Session, UInt8, Cint, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
+        on_send_callback_ptr = @cfunction on_send_callback Csize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
+        on_error_callback_ptr = @cfunction on_error_callback Cint (Nghttp2Session, Nghttp2Error, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
+        on_data_source_read_callback_ptr = @cfunction on_data_source_read_callback Cssize_t (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{UInt32}, Ptr{Ptr{IOBuffer}}, Ptr{Cvoid})
+        on_stream_close_callback_ptr = @cfunction on_stream_close_callback Cint (Nghttp2Session, Cint, UInt32, Ptr{Cvoid})
+
+        return new(
+            on_recv_callback_ptr,
+            on_frame_recv_callback_ptr,
+            on_begin_headers_callback_ptr,
+            on_header_recv_callback_ptr,
+            on_data_chunk_recv_callback_ptr,
+            on_send_callback_ptr,
+            on_error_callback_ptr,
+            on_data_source_read_callback_ptr,
+            on_stream_close_callback_ptr)
+    end
 end
 
 """
@@ -884,6 +948,15 @@ end
     Receive from the session.
 """
 function recv!(session::Session)
+    # TODO one thread must read from session.io
+    # http2 streams are written to buffer::IOBuffer or PipeBuffer
+    # reader waits, receiver knows when the stream is closed
+    # tcp might be opened
+    #
+    # we could have one or more threads reading from the single session
+    #
+    # request response is not much different
+    #
     while isempty(session.recv_streams_id) && !eof(session.io) && !has_errors(session)
         available_bytes = bytesavailable(session.io)
 
@@ -891,6 +964,7 @@ function recv!(session::Session)
 
         GC.@preserve session begin
             session_set_data(session)
+
             nghttp2_session_mem_recv(session.nghttp2_session, input_data)
         end
     end
@@ -925,7 +999,7 @@ end
 function Sockets.send(
     session::Session,
     stream_id::Int32,
-    send_buffer::IOBuffer,
+    send_stream::IO,
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
     println("send on $(session) $(stream_id)");
@@ -935,14 +1009,16 @@ function Sockets.send(
 
     GC.@preserve session send_buffer headers trailers begin
         session_set_data(session)
+
         data_source = DataSource(send_buffer, trailers)
 
         GC.@preserve data_source begin
-            data_provider = DataProvider(pointer_from_objref(data_source), on_data_source_read_callback_ptr)
+            data_provider = DataProvider(
+                pointer_from_objref(data_source),
+                NGHTTP2_CALLBACKS.x.on_data_source_read_callback_ptr)
 
             GC.@preserve data_provider begin
-                # headers and data
-                #
+                # send headers, data, and tailers
                 result = ccall((:nghttp2_submit_response, libnghttp2),
                     Cint,
                     (Nghttp2Session, Int32, Ptr{Cvoid}, Csize_t, Ptr{Cvoid}),
@@ -970,6 +1046,7 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
 
     GC.@preserve session send_buffer headers trailers begin
         session_set_data(session)
+
         data_source = DataSource(send_buffer, trailers)
 
         GC.@preserve data_source begin
@@ -978,8 +1055,7 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
                 NGHTTP2_CALLBACKS.x.on_data_source_read_callback_ptr)
 
             GC.@preserve data_provider begin
-                # headers and data
-                #
+                # send headers, data, and tailers
                 stream_id = ccall((:nghttp2_submit_request, libnghttp2),
                     Cint,
                     (Nghttp2Session, Ptr{Cvoid}, Ptr{Cvoid}, Csize_t, Ptr{Cvoid}),
@@ -1029,45 +1105,6 @@ end
 """
     Runme.
 """
-
-
-"""
-    Nghttp callbacks.
-"""
-struct Nghttp2Callbacks
-    on_recv_callback_ptr::Ptr{Nothing}
-    on_frame_recv_callback_ptr::Ptr{Nothing}
-    on_begin_headers_callback_ptr::Ptr{Nothing}
-    on_header_recv_callback_ptr::Ptr{Nothing}
-    on_data_chunk_recv_callback_ptr::Ptr{Nothing}
-    on_send_callback_ptr::Ptr{Nothing}
-    on_error_callback_ptr::Ptr{Nothing}
-    on_data_source_read_callback_ptr::Ptr{Nothing}
-    on_stream_close_callback_ptr::Ptr{Nothing}
-
-    function Nghttp2Callbacks()
-        on_recv_callback_ptr = @cfunction on_recv_callback Cssize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
-        on_frame_recv_callback_ptr = @cfunction on_frame_recv_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{Cvoid})
-        on_begin_headers_callback_ptr = @cfunction on_begin_headers_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{Cvoid})
-        on_header_recv_callback_ptr = @cfunction on_header_recv_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{UInt8}, Csize_t, Ptr{UInt8}, Csize_t, UInt8, Ptr{Cvoid})
-        on_data_chunk_recv_callback_ptr = @cfunction on_data_chunk_recv_callback Cint (Nghttp2Session, UInt8, Cint, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
-        on_send_callback_ptr = @cfunction on_send_callback Csize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
-        on_error_callback_ptr = @cfunction on_error_callback Cint (Nghttp2Session, Nghttp2Error, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
-        on_data_source_read_callback_ptr = @cfunction on_data_source_read_callback Cssize_t (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{UInt32}, Ptr{Ptr{IOBuffer}}, Ptr{Cvoid})
-        on_stream_close_callback_ptr = @cfunction on_stream_close_callback Cint (Nghttp2Session, Cint, UInt32, Ptr{Cvoid})
-
-        return new(
-            on_recv_callback_ptr,
-            on_frame_recv_callback_ptr,
-            on_begin_headers_callback_ptr,
-            on_header_recv_callback_ptr,
-            on_data_chunk_recv_callback_ptr,
-            on_send_callback_ptr,
-            on_error_callback_ptr,
-            on_data_source_read_callback_ptr,
-            on_stream_close_callback_ptr)
-    end
-end
 
 const NGHTTP2_CALLBACKS = Ref{Nghttp2Callbacks}()
 

@@ -34,9 +34,12 @@ end
     recv_stream_id1, stream1 = Nghttp2.recv!(client_session.session)
     recv_stream_id2, stream2 = Nghttp2.recv!(client_session.session)
 
-    println("=== [1]")
+    stream1_length = length(read(stream1.buffer))
+    stream2_length = length(read(stream2.buffer))
+
+    println("=== [1] $(stream1_length)")
     #println("$(String(read(stream1.buffer)))")
-    println("=== [2]")
+    println("=== [2] $(stream2_length)")
     #println("$(String(read(stream2.buffer)))")
     # #TODO pinning is wrong, if removed it is crashing
     #@show recv_stream_id1, stream1
@@ -44,13 +47,13 @@ end
 end
 
 @testset "Https2 Connection" begin
-cs = connect("nghttp2.org", 443)
+    tcp_stream = connect("nghttp2.org", 443)
 
     ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
     result = OpenSSL.set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION | OpenSSL.SSL_OP_NO_TLSv1_2)
     result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
 
-    bio_stream = OpenSSL.BIOStream(cs)
+    bio_stream = OpenSSL.BIOStream(tcp_stream)
     ssl_stream = SSLStream(ssl_ctx, bio_stream, bio_stream)
 
     # TODO expose connect
@@ -59,10 +62,8 @@ cs = connect("nghttp2.org", 443)
 
     @show OpenSSL.get_error()
 
-    #socket = connect("www.nghttp2.org", 80)
-    #@show socket
-
     cs = Nghttp2.open(ssl_stream)
+    @show cs
 
     iob = IOBuffer()
     @show stream_id1 = Nghttp2.submit_request(
@@ -79,10 +80,13 @@ cs = connect("nghttp2.org", 443)
     recv_stream_id1, stream1 = Nghttp2.recv!(cs.session)
     recv_stream_id2, stream2 = Nghttp2.recv!(cs.session)
 
-    println("=== [1]")
-    println("$(String(read(stream1.buffer)))")
-    println("=== [2]")
-    println("$(String(read(stream2.buffer)))")
+    stream1_length = length(read(stream1.buffer))
+    stream2_length = length(read(stream2.buffer))
+
+    println("=== [1] $(stream1_length)")
+    #println("$(String(read(stream1.buffer)))")
+    println("=== [2] $(stream2_length)")
+
     # #TODO pinning is wrong, if removed it is crashing
     #@show recv_stream_id1, stream1
     #@show recv_stream_id2, stream2
