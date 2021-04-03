@@ -152,13 +152,15 @@ const Option{T} = Union{Nothing, T} where {T}
     NGHTTP2_FLAG_NONE = 0,
     # The END_STREAM flag.
     # The ACK flag.
-    NGHTTP2_FLAG_END_STREAM_OR_ACK = 0x01,
+    NGHTTP2_FLAG_END_STREAM = 0x01,
     # The END_HEADERS flag.
     NGHTTP2_FLAG_END_HEADERS = 0x04,
     # The PADDED flag.
     NGHTTP2_FLAG_PADDED = 0x08,
     # The PRIORITY flag.
     NGHTTP2_FLAG_PRIORITY = 0x20)
+
+const NGHTTP2_FLAG_ACK = NGHTTP2_FLAG_END_STREAM
 
 """
     The flags for header field name/value pair.
@@ -385,22 +387,28 @@ end
 """
     Library definition.
 """
-struct Stream
+struct Http2Stream <: IO
     stream_id::Int32
     buffer::IOBuffer
     headers::Dict{String, String}
+    lock::ReentrantLock
 
-    Stream(stream_id::Int32) = new(stream_id, IOBuffer(), Dict{String, String}())
+    Http2Stream(stream_id::Int32) =
+        new(
+            stream_id,
+            IOBuffer(),
+            Dict{String, String}(),
+            ReentrantLock())
 end
 
 """
-    Http2 session.
+    Internal http2 session. Exposed as Http2ClientSession and Http2ServerSession.
 """
 mutable struct Session
     io::IO
     nghttp2_session::Nghttp2Session
     session_id::Int64
-    recv_streams::Dict{Int32, Stream}
+    recv_streams::Dict{Int32, Http2Stream}
     recv_streams_id::Queue{Int32}
     lock::ReentrantLock
     exception::Option{Exception}
@@ -409,7 +417,7 @@ mutable struct Session
         new(io,
             nghttp2_session,
             Threads.atomic_add!(SessionIdCounter, 1),
-            Dict{Int32, Stream}(),
+            Dict{Int32, Http2Stream}(),
             Queue{Int32}(),
             ReentrantLock(),
             nothing)
@@ -692,16 +700,25 @@ Base.show(io::IO, nv_pair::NVPair) =
 function on_recv_callback(nghttp2_session::Nghttp2Session, buf::Ptr{UInt8}, len::Csize_t, flags::Cint, user_data::Ptr{Cvoid})::Cssize_t
     # Get the server session object.
     session = session_from_data(user_data)
-    @show session.id
 
     result::Cssize_t = 0
     return result
 end
 
 function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2Frame, user_data::Ptr{Cvoid})::Cint
+    # Get the server session object.
+    session = session_from_data(user_data)
+
     frame_header = unsafe_load(Ptr{Nghttp2FrameHeader}(frame.ptr))
 
-    # https://nghttp2.org/documentation/types.html#c.nghttp2_on_frame_recv_callback
+    stream_id = frame_header.stream_id
+    last_frame = stream_id !=0 && frame_header.flags & UInt8(NGHTTP2_FLAG_END_STREAM) != 0
+
+    if last_frame
+        lock(session.lock) do
+            enqueue!(session.recv_streams_id, frame_header.stream_id)
+        end
+    end
 
     result::Cint = 0
     return result
@@ -735,7 +752,9 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
 
     if (add_new_stream)
         # Create a new stream.
-        session.recv_streams[frame_header.stream_id] = Stream(frame_header.stream_id)
+        lock(session.lock) do
+            session.recv_streams[frame_header.stream_id] = Http2Stream(frame_header.stream_id)
+        end
     end
 
     result::Cint = 0
@@ -774,9 +793,7 @@ function on_data_chunk_recv_callback(nghttp2_session::Nghttp2Session, flags::UIn
     # Write received data to the received stream buffer.
     recv_stream = session.recv_streams[stream_id]
 
-    mark(recv_stream.buffer)
     write(recv_stream.buffer, data)
-    reset(recv_stream.buffer)
 
     result::Cint = 0
     return result
@@ -826,21 +843,17 @@ function on_data_source_read_callback(
     data_source = unsafe_load(data_source)
     data_source = unsafe_pointer_to_objref(data_source)
 
-    #TODO, ensure buf_length
     in_buffer = read(data_source.send_stream, buf_length)
     in_length = length(in_buffer)
-    println("on_data_source_read_callback $(buf_length) $(in_length)")
 
     GC.@preserve in_buffer unsafe_copyto!(buf, pointer(in_buffer), in_length)
 
-    #TODO is it end of send_stream
     source_stream_eof = eof(data_source.send_stream)
     source_has_trailer = length(data_source.trailer) != 0
 
-    println("|---> on_data_source_read_callback: is_source_eof $(source_stream_eof)")
-
+    # #VERIFY
     # #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
-    #unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM))
+    # unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM))
 
     send_data_flags::Nghttp2DataFlags = NGHTTP2_DATA_FLAG_NONE
     if source_stream_eof
@@ -869,9 +882,7 @@ end
 function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})
     # Get the server session object.
     session = session_from_data(user_data)
-
-    # Stream was closed.
-    enqueue!(session.recv_streams_id, stream_id)
+    println("Stream closed: $(stream_id) $(error_code)")
 
     result::Cint = 0
     return result
@@ -957,6 +968,7 @@ function recv!(session::Session)
     #
     # request response is not much different
     #
+    
     while isempty(session.recv_streams_id) && !eof(session.io) && !has_errors(session)
         available_bytes = bytesavailable(session.io)
 
@@ -969,26 +981,24 @@ function recv!(session::Session)
         end
     end
 
+    available_bytes = bytesavailable(session.io)
+    println("Buffer ready")
+
     # Rethrow if errors occurred.
     if (has_errors(session))
         throw(session.exception)
     end
 
     if (isempty(session.recv_streams_id))
-        return (0, Stream(Int32(0)))
+        return (0, Http2Stream(Int32(0)))
     end
 
     # Return stream in the order they have been received.
-    @show session.recv_streams_id
     recv_stream_id = dequeue!(session.recv_streams_id)
-    println("Received a stream: $(recv_stream_id)")
-    @show session.recv_streams_id
 
-    @show recv_stream_id
-
-    @show session.recv_streams
-
+    #TODO another workaround
     recv_stream = pop!(session.recv_streams, recv_stream_id)
+    seek(recv_stream.buffer, 0)
 
     return (recv_stream_id, recv_stream)
 end
@@ -1067,6 +1077,8 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
                 if (stream_id < 0)
                     throw("error")
                 end
+
+                println("send stream_id: $(stream_id)")
 
                 result = nghttp2_session_send(session.nghttp2_session)
             end

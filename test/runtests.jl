@@ -29,24 +29,19 @@ end
             "user-agent" => "curl/7.75.0"
         ])
 
-    @test stream_id1 != 0
-
     recv_stream_id1, stream1 = Nghttp2.recv!(client_session.session)
     recv_stream_id2, stream2 = Nghttp2.recv!(client_session.session)
 
-    stream1_length = length(read(stream1.buffer))
-    stream2_length = length(read(stream2.buffer))
+    @test length(read(stream1.buffer)) == 6616
+    @test length(read(stream2.buffer)) == 39082
 
-    println("=== [1] $(stream1_length)")
-    #println("$(String(read(stream1.buffer)))")
-    println("=== [2] $(stream2_length)")
-    #println("$(String(read(stream2.buffer)))")
-    # #TODO pinning is wrong, if removed it is crashing
-    #@show recv_stream_id1, stream1
-    #@show recv_stream_id2, stream2
+    header_lengths = (length(stream1.headers), length(stream2.headers))
+    @test minimum(header_lengths) == 14
+    @test maximum(header_lengths) == 15
 end
 
 @testset "Https2 Connection" begin
+    println("===[Https]===")
     tcp_stream = connect("nghttp2.org", 443)
 
     ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
@@ -57,16 +52,12 @@ end
     ssl_stream = SSLStream(ssl_ctx, bio_stream, bio_stream)
 
     # TODO expose connect
-    result = OpenSSL.connect(ssl_stream)
-    @show result
-
-    @show OpenSSL.get_error()
+    result = connect(ssl_stream)
 
     cs = Nghttp2.open(ssl_stream)
-    @show cs
 
     iob = IOBuffer()
-    @show stream_id1 = Nghttp2.submit_request(
+    stream_id1 = Nghttp2.submit_request(
         cs.session, iob,
         [
             ":method" => "GET",
@@ -77,19 +68,20 @@ end
             "user-agent" => "curl/7.75.0"
         ])
 
+    @show stream_id1
+
     recv_stream_id1, stream1 = Nghttp2.recv!(cs.session)
     recv_stream_id2, stream2 = Nghttp2.recv!(cs.session)
 
-    stream1_length = length(read(stream1.buffer))
-    stream2_length = length(read(stream2.buffer))
+    println("[#TODO] => Wait too long")
 
-    println("=== [1] $(stream1_length)")
-    #println("$(String(read(stream1.buffer)))")
-    println("=== [2] $(stream2_length)")
+    lengths = (length(read(stream1.buffer)), length(read(stream2.buffer)))
+    @test minimum(lengths) == 6616
+    @test maximum(lengths) == 39082
 
-    # #TODO pinning is wrong, if removed it is crashing
-    #@show recv_stream_id1, stream1
-    #@show recv_stream_id2, stream2
+    header_lengths = (length(stream1.headers), length(stream2.headers))
+    @test minimum(header_lengths) == 15
+    @test maximum(header_lengths) == 16
 
     """
     @show stream_id2 = Http2.submit_request(
@@ -105,9 +97,6 @@ end
 
     @show recv_stream_id2, stream2 = Http2.recv!(cs.session)
     """
-#    @show recv_stream_id3, stream3 = Http2.recv!(cs.session)
-#    @show recv_stream_id4, stream4 = Http2.recv!(cs.session)
-#    @show recv_stream_id5, stream5 = Http2.recv!(cs.session)
 end
 
 function test_client()
@@ -153,8 +142,6 @@ function test_server()
             break
         end
 
-        println("Received data from stream: $(stream_id)")
-        @show stream.headers
         send_buffer = IOBuffer(read(stream.buffer))
 
         @show send_buffer
