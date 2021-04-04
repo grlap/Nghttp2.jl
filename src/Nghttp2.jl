@@ -18,7 +18,6 @@
     Items:
 Nghttp2:
 [ ] add unit test
-[ ] redesign Http2.Session => Http2.Http2Session ??
 [ ] responses
 [ ] nghttp2_on_stream_close_callback, close stream on error
 [ ] nghttp2_on_data_chunk_recv_callback
@@ -33,7 +32,7 @@ OpenSSL:
 
 module Nghttp2
 
-export send, recv!, submit_request, request, nghttp2_version
+export send, recv!, submit_request, request, nghttp2_version, read, read_all
 
 using nghttp2_jll
 using BitFlags
@@ -41,6 +40,45 @@ using DataStructures
 using Sockets
 
 const Option{T} = Union{Nothing, T} where {T}
+
+"""
+    Custom Event.
+"""
+mutable struct SignalEvent <: Base.AbstractLock
+    notify::Threads.Condition
+    set::Bool
+    SignalEvent() = new(Threads.Condition(), false)
+end
+
+Base.lock(e::SignalEvent) = lock(e.notify)
+
+Base.unlock(e::SignalEvent) = unlock(e.notify)
+
+function wait(e::SignalEvent)
+    lock(e.notify)
+    try
+        while !e.set
+            Threads.wait(e.notify)
+        end
+        e.set = false
+    finally
+        unlock(e.notify)
+    end
+    nothing
+end
+
+function notify(e::SignalEvent)
+    lock(e.notify)
+    try
+        if !e.set
+            e.set = true
+            Threads.notify(e.notify)
+        end
+    finally
+        unlock(e.notify)
+    end
+    nothing
+end
 
 """
     Error codes used by Nghttp2 library.
@@ -387,19 +425,65 @@ end
 """
     Library definition.
 """
-struct Http2Stream <: IO
+mutable struct Http2Stream <: IO
     stream_id::Int32
     buffer::IOBuffer
     headers::Dict{String, String}
-    lock::ReentrantLock
+    data_available_event::SignalEvent
+    eof::Bool
 
     Http2Stream(stream_id::Int32) =
-        new(
-            stream_id,
-            IOBuffer(),
+        new(stream_id,
+            PipeBuffer(),
             Dict{String, String}(),
-            ReentrantLock())
+            SignalEvent(),
+            false)
 end
+
+"""
+    Reads available data from the http2 stream.
+"""
+function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
+    wait(http2_stream.data_available_event)
+
+    lock(http2_stream.data_available_event) do
+        result_buffer = read(http2_stream.buffer)
+        return result_buffer
+    end
+end
+
+"""
+    Reads all the data from the http2 stream.
+"""
+function read_all(http2_stream::Http2Stream)::Vector{UInt8}
+    # Create IOBuffer and copy chunks until we read eof.
+    result_stream = IOBuffer()
+    eof_stream = true
+
+    while eof_stream
+        wait(http2_stream.data_available_event)
+
+        lock(http2_stream.data_available_event) do
+            buffer_chunk = read(http2_stream.buffer)
+            write(result_stream, buffer_chunk)
+
+            eof_stream = !http2_stream.eof
+        end
+    end
+
+    seekstart(result_stream)
+    return result_stream.data
+end
+
+function write2(http2_stream::Http2Stream, out_buffer)
+    lock(http2_stream.data_available_event) do
+        write(http2_stream.buffer, out_buffer)
+    end
+
+    notify(http2_stream.data_available_event)
+end
+
+Base.eof(http2_stream::Http2Stream) = http2_stream.eof
 
 """
     Internal http2 session. Exposed as Http2ClientSession and Http2ServerSession.
@@ -410,8 +494,10 @@ mutable struct Session
     session_id::Int64
     recv_streams::Dict{Int32, Http2Stream}
     recv_streams_id::Queue{Int32}
-    lock::ReentrantLock
     exception::Option{Exception}
+    lock::ReentrantLock
+    on_recv_stream_event::SignalEvent
+    receive_task::Option{Task}
 
     Session(io::IO, nghttp2_session::Nghttp2Session) =
         new(io,
@@ -419,7 +505,9 @@ mutable struct Session
             Threads.atomic_add!(SessionIdCounter, 1),
             Dict{Int32, Http2Stream}(),
             Queue{Int32}(),
+            nothing,
             ReentrantLock(),
+            SignalEvent(),
             nothing)
 end
 
@@ -715,9 +803,15 @@ function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2F
     last_frame = stream_id !=0 && frame_header.flags & UInt8(NGHTTP2_FLAG_END_STREAM) != 0
 
     if last_frame
+        println("waiting for last frame session.lock stream_id:$(frame_header.stream_id)")
         lock(session.lock) do
-            enqueue!(session.recv_streams_id, frame_header.stream_id)
+            println("last frame stream_id:$(frame_header.stream_id)")
+            http2_stream::Http2Stream = session.recv_streams[frame_header.stream_id]
+            ### LATEST not mutable
+            http2_stream.eof = true
+            notify(http2_stream.data_available_event)
         end
+        println("last frame done stream_id:$(frame_header.stream_id)")
     end
 
     result::Cint = 0
@@ -739,9 +833,11 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
 
         is_server::Bool = is_nghttp2_server_session(nghttp2_session)
 
+        #|| headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE
         #TODO rewrite this
+        #TODO bug here we count incoming outgoing streams
         if ((is_server && headers_frame.cat == NGHTTP2_HCAT_REQUEST) ||
-            (!is_server && (headers_frame.cat == NGHTTP2_HCAT_RESPONSE || headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE)))
+            (!is_server && (headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE)))
             add_new_stream = true
         end
     end
@@ -754,7 +850,12 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
         # Create a new stream.
         lock(session.lock) do
             session.recv_streams[frame_header.stream_id] = Http2Stream(frame_header.stream_id)
+            enqueue!(session.recv_streams_id, frame_header.stream_id)
         end
+
+        # Notify reader there is a new stream.
+        println(">==>> Session:$(session.session_id) new Stream: $(frame_header.stream_id).")
+        notify(session.on_recv_stream_event)
     end
 
     result::Cint = 0
@@ -790,10 +891,11 @@ function on_data_chunk_recv_callback(nghttp2_session::Nghttp2Session, flags::UIn
     data = Vector{UInt8}(undef, len)
     GC.@preserve data unsafe_copyto!(pointer(data), buf, len)
 
+    # TODO lock session, get http2_stream
     # Write received data to the received stream buffer.
     recv_stream = session.recv_streams[stream_id]
 
-    write(recv_stream.buffer, data)
+    write2(recv_stream, data)
 
     result::Cint = 0
     return result
@@ -958,7 +1060,7 @@ end
 """
     Receive from the session.
 """
-function recv!(session::Session)
+function recv!(session::Session)::Option{Http2Stream}
     # TODO one thread must read from session.io
     # http2 streams are written to buffer::IOBuffer or PipeBuffer
     # reader waits, receiver knows when the stream is closed
@@ -968,39 +1070,63 @@ function recv!(session::Session)
     #
     # request response is not much different
     #
-    
-    while isempty(session.recv_streams_id) && !eof(session.io) && !has_errors(session)
-        available_bytes = bytesavailable(session.io)
-
-        input_data = read(session.io, available_bytes)
-
-        GC.@preserve session begin
-            session_set_data(session)
-
-            nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+    if (isnothing(session.receive_task))
+        println("reading from stream")
+        session.receive_task = @async begin
+            try
+                while !eof(session.io) && !has_errors(session)
+                    available_bytes = bytesavailable(session.io)
+                    input_data = read(session.io, available_bytes)
+        
+                    GC.@preserve session begin
+                        session_set_data(session)
+        
+                        nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+                    end
+                end
+            catch e
+                println("exception:")
+                throw(e)
+            end
+            println("|| done reading task.")
         end
     end
 
-    available_bytes = bytesavailable(session.io)
-    println("Buffer ready")
-
-    # Rethrow if errors occurred.
-    if (has_errors(session))
-        throw(session.exception)
+    println("==> Session: $(session.session_id)  waits on $(Threads.threadid()) for a new stream")
+    # wait for ready stream
+    
+    is_empty = false
+    lock(session.lock) do
+        is_empty = isempty(session.recv_streams_id)
     end
 
-    if (isempty(session.recv_streams_id))
-        return (0, Http2Stream(Int32(0)))
+    if is_empty
+        wait(session.on_recv_stream_event)
     end
 
-    # Return stream in the order they have been received.
-    recv_stream_id = dequeue!(session.recv_streams_id)
+    println("<== Session: $(session.session_id) received new stream $(session.recv_streams_id))")
 
-    #TODO another workaround
-    recv_stream = pop!(session.recv_streams, recv_stream_id)
-    seek(recv_stream.buffer, 0)
+    lock(session.lock) do
+        # Rethrow if errors occurred.
+        if (has_errors(session))
+            throw(session.exception)
+        end
 
-    return (recv_stream_id, recv_stream)
+        if (isempty(session.recv_streams_id))
+            # No new stream.
+            return nothing
+        end
+
+        # Return a new stream.
+        recv_stream_id = dequeue!(session.recv_streams_id)
+
+        # TODO another workaround
+        recv_stream = session.recv_streams[recv_stream_id]
+        #seek(recv_stream.buffer, 0)
+
+        println("[] => Session: $(session.session_id) returns a new Stream: $(recv_stream.stream_id)")
+        return recv_stream
+    end
 end
 
 """
@@ -1077,8 +1203,6 @@ function submit_request(session::Session, send_buffer::IOBuffer, header::StringP
                 if (stream_id < 0)
                     throw("error")
                 end
-
-                println("send stream_id: $(stream_id)")
 
                 result = nghttp2_session_send(session.nghttp2_session)
             end
