@@ -42,40 +42,32 @@ using Sockets
 const Option{T} = Union{Nothing, T} where {T}
 
 """
-    Custom Event.
+    Signal lock. ReentrantLock with wait and notify functionality.
 """
-mutable struct SignalEvent <: Base.AbstractLock
+mutable struct SignalLock <: Base.AbstractLock
     notify::Threads.Condition
     set::Bool
-    SignalEvent() = new(Threads.Condition(), false)
+    SignalLock() = new(Threads.Condition(), false)
 end
 
-Base.lock(e::SignalEvent) = lock(e.notify)
+Base.lock(e::SignalLock) = lock(e.notify)
 
-Base.unlock(e::SignalEvent) = unlock(e.notify)
+Base.unlock(e::SignalLock) = unlock(e.notify)
 
-function wait(e::SignalEvent)
-    lock(e.notify)
-    try
-        while !e.set
-            Threads.wait(e.notify)
-        end
-        e.set = false
-    finally
-        unlock(e.notify)
+function wait(e::SignalLock)
+    Base.assert_havelock(e.notify)
+    while !e.set
+        Threads.wait(e.notify)
     end
+    e.set = false
     nothing
 end
 
-function notify(e::SignalEvent)
-    lock(e.notify)
-    try
-        if !e.set
-            e.set = true
-            Threads.notify(e.notify)
-        end
-    finally
-        unlock(e.notify)
+function notify(e::SignalLock)
+    Base.assert_havelock(e.notify)
+    if !e.set
+        e.set = true
+        Threads.notify(e.notify)
     end
     nothing
 end
@@ -429,14 +421,14 @@ mutable struct Http2Stream <: IO
     stream_id::Int32
     buffer::IOBuffer
     headers::Dict{String, String}
-    data_available_event::SignalEvent
+    lock::SignalLock
     eof::Bool
 
     Http2Stream(stream_id::Int32) =
         new(stream_id,
             PipeBuffer(),
             Dict{String, String}(),
-            SignalEvent(),
+            SignalLock(),
             false)
 end
 
@@ -444,9 +436,9 @@ end
     Reads available data from the http2 stream.
 """
 function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
-    wait(http2_stream.data_available_event)
+    wait(http2_stream.lock)
 
-    lock(http2_stream.data_available_event) do
+    lock(http2_stream.lock) do
         result_buffer = read(http2_stream.buffer)
         return result_buffer
     end
@@ -461,9 +453,9 @@ function read_all(http2_stream::Http2Stream)::Vector{UInt8}
     eof_stream = true
 
     while eof_stream
-        wait(http2_stream.data_available_event)
+        lock(http2_stream.lock) do
+            wait(http2_stream.lock)
 
-        lock(http2_stream.data_available_event) do
             buffer_chunk = read(http2_stream.buffer)
             write(result_stream, buffer_chunk)
 
@@ -476,11 +468,11 @@ function read_all(http2_stream::Http2Stream)::Vector{UInt8}
 end
 
 function write2(http2_stream::Http2Stream, out_buffer)
-    lock(http2_stream.data_available_event) do
+    lock(http2_stream.lock) do
+        # Write received data to the steam and notify reader.
         write(http2_stream.buffer, out_buffer)
+        notify(http2_stream.lock)
     end
-
-    notify(http2_stream.data_available_event)
 end
 
 Base.eof(http2_stream::Http2Stream) = http2_stream.eof
@@ -495,8 +487,7 @@ mutable struct Session
     recv_streams::Dict{Int32, Http2Stream}
     recv_streams_id::Queue{Int32}
     exception::Option{Exception}
-    lock::ReentrantLock
-    on_recv_stream_event::SignalEvent
+    lock::SignalLock
     receive_task::Option{Task}
 
     Session(io::IO, nghttp2_session::Nghttp2Session) =
@@ -506,8 +497,7 @@ mutable struct Session
             Dict{Int32, Http2Stream}(),
             Queue{Int32}(),
             nothing,
-            ReentrantLock(),
-            SignalEvent(),
+            SignalLock(),
             nothing)
 end
 
@@ -804,14 +794,20 @@ function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2F
 
     if last_frame
         println("waiting for last frame session.lock stream_id:$(frame_header.stream_id)")
+
+        # Last frame in the stream detected.
+        # Mark eof in stream and signal it.
+        http2_stream::Option{Http2Stream} = nothing
+
         lock(session.lock) do
             println("last frame stream_id:$(frame_header.stream_id)")
-            http2_stream::Http2Stream = session.recv_streams[frame_header.stream_id]
-            ### LATEST not mutable
-            http2_stream.eof = true
-            notify(http2_stream.data_available_event)
+            http2_stream = session.recv_streams[frame_header.stream_id]
         end
-        println("last frame done stream_id:$(frame_header.stream_id)")
+
+        lock(http2_stream.lock) do
+            http2_stream.eof = true
+            notify(http2_stream.lock)
+        end
     end
 
     result::Cint = 0
@@ -851,11 +847,11 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
         lock(session.lock) do
             session.recv_streams[frame_header.stream_id] = Http2Stream(frame_header.stream_id)
             enqueue!(session.recv_streams_id, frame_header.stream_id)
-        end
 
-        # Notify reader there is a new stream.
-        println(">==>> Session:$(session.session_id) new Stream: $(frame_header.stream_id).")
-        notify(session.on_recv_stream_event)
+            # Notify reader there is a new stream.
+            println(">==>> Session:$(session.session_id) new Stream: $(frame_header.stream_id).")
+            notify(session.lock)
+        end
     end
 
     result::Cint = 0
@@ -916,16 +912,22 @@ function on_send_callback(nghttp2_session::Nghttp2Session, data::Ptr{UInt8}, len
     return length
 end
 
-function on_error_callback(nghttp2_session::Nghttp2Session, lib_error_code::Nghttp2Error, msg::Ptr{UInt8}, len::Csize_t, user_data::Ptr{Cvoid})
-    println("on_error_callback $(lib_error_code)")
-
+function on_error_callback(
+    nghttp2_session::Nghttp2Session,
+    lib_error_code::Nghttp2Error,
+    msg::Ptr{UInt8},
+    len::Csize_t,
+    user_data::Ptr{Cvoid})::Cint
     session = session_from_data(user_data)
+    println("on_error_callback session_id:$(session.session_id) nghtt2_error_code: $(lib_error_code)")
 
-    # Create exception object
+    # Create Http2 exception object, include Nghttp2 error.
     error = Http2ProtocolException(lib_error_code, unsafe_string(msg))
 
     lock(session.lock) do
+        # TODO, signal all the stream readers
         session.exception = error
+        notify(session.lock)
     end
 
     @show session.exception
@@ -941,7 +943,7 @@ function on_data_source_read_callback(
     buf_length::Csize_t,
     data_flags::Ptr{UInt32},
     data_source::Ptr{Ptr{IOBuffer}},
-    user_data::Ptr{Cvoid})
+    user_data::Ptr{Cvoid})::Cssize_t
     data_source = unsafe_load(data_source)
     data_source = unsafe_pointer_to_objref(data_source)
 
@@ -953,7 +955,7 @@ function on_data_source_read_callback(
     source_stream_eof = eof(data_source.send_stream)
     source_has_trailer = length(data_source.trailer) != 0
 
-    # #VERIFY
+    # #VERIFY if the current logic is correct, 
     # #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
     # unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM))
 
@@ -981,7 +983,7 @@ function on_data_source_read_callback(
     return result
 end
 
-function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})
+function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid}):Cint
     # Get the server session object.
     session = session_from_data(user_data)
     println("Stream closed: $(stream_id) $(error_code)")
@@ -1077,10 +1079,10 @@ function recv!(session::Session)::Option{Http2Stream}
                 while !eof(session.io) && !has_errors(session)
                     available_bytes = bytesavailable(session.io)
                     input_data = read(session.io, available_bytes)
-        
+
                     GC.@preserve session begin
                         session_set_data(session)
-        
+
                         nghttp2_session_mem_recv(session.nghttp2_session, input_data)
                     end
                 end
@@ -1088,41 +1090,33 @@ function recv!(session::Session)::Option{Http2Stream}
                 println("exception:")
                 throw(e)
             end
+            #
             println("|| done reading task.")
         end
     end
 
     println("==> Session: $(session.session_id)  waits on $(Threads.threadid()) for a new stream")
-    # wait for ready stream
-    
-    is_empty = false
+
+    # Wait for a new stream.
     lock(session.lock) do
-        is_empty = isempty(session.recv_streams_id)
-    end
+        if isempty(session.recv_streams_id)
+            wait(session.lock)
+        end
 
-    if is_empty
-        wait(session.on_recv_stream_event)
-    end
-
-    println("<== Session: $(session.session_id) received new stream $(session.recv_streams_id))")
-
-    lock(session.lock) do
+        println("<== Session: $(session.session_id) received new stream $(session.recv_streams_id))")
         # Rethrow if errors occurred.
         if (has_errors(session))
             throw(session.exception)
         end
 
+        # Return if there are no new streams.
         if (isempty(session.recv_streams_id))
-            # No new stream.
             return nothing
         end
 
         # Return a new stream.
         recv_stream_id = dequeue!(session.recv_streams_id)
-
-        # TODO another workaround
         recv_stream = session.recv_streams[recv_stream_id]
-        #seek(recv_stream.buffer, 0)
 
         println("[] => Session: $(session.session_id) returns a new Stream: $(recv_stream.stream_id)")
         return recv_stream

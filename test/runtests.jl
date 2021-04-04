@@ -3,11 +3,16 @@ using OpenSSL
 using Nghttp2
 using Test
 
-@testset "Event" begin
-    s = Nghttp2.SignalEvent()
+@testset "Signal lock" begin
+    s = Nghttp2.SignalLock()
 
-    Nghttp2.notify(s)
-    Nghttp2.wait(s)
+    lock(s) do
+        Nghttp2.notify(s)
+    end
+    
+    lock(s) do
+        Nghttp2.wait(s)
+    end
 end
 
 # Verifies calling into Nghttp library.
@@ -39,27 +44,13 @@ end
     stream1 = Nghttp2.recv!(client_session.session)
     stream2 = Nghttp2.recv!(client_session.session)
 
-    println("Received streams: $(stream1.stream_id) $(stream2.stream_id) ")
+    lengths = (length(read_all(stream1)), length(read_all(stream2)))
+    @test minimum(lengths) == 6616
+    @test maximum(lengths) == 39082
 
-    x = read_all(stream1)
-    @show eof(stream1)
-    y = read_all(stream2)
-    @show eof(stream2)
-
-    println("====")
-    # @show String(x)
-    println("====")
-    # @show String(y)
-
-    @show length(x)
-    @show length(y)
-
-    #@test length(x) == 6616
-    #@test length(read(stream2)) == 39082
-
-    #header_lengths = (length(stream1.headers), length(stream2.headers))
-    #@test minimum(header_lengths) == 14
-    #@test maximum(header_lengths) == 15
+    header_lengths = (length(stream1.headers), length(stream2.headers))
+    @test minimum(header_lengths) == 15
+    @test maximum(header_lengths) == 19
 end
 
 @testset "Https2 Connection" begin
