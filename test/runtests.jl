@@ -3,15 +3,104 @@ using OpenSSL
 using Nghttp2
 using Test
 
-@testset "Signal lock" begin
-    s = Nghttp2.SignalLock()
+"""
+    recv!
 
-    lock(s) do
-        Nghttp2.notify(s)
+        session reading loop
+            read and dispatch
+
+            single Http2Session
+                read()
+
+            multiple entries from readstream
+                until it is availabe
+
+        ┌─────────────────┐
+        │Http2Stream::read│─ ─ ─
+        └─────────────────┘     │        session.read_lock
+        ┌─────────────────┐      ─ ─ ▶    ╔════╗      ┌─────────────┐
+        │Http2Stream::read│───────────────╣Lock╠─────▶│Session::read│
+        └─────────────────┘      ─ ─ ▶    ╚════╝      └─────────────┘
+        ┌─────────────────┐     │
+        │Http2Stream::read│─ ─ ─
+        └─────────────────┘
+
+Less concurrent:
+
+    single session lock
+        single read, make sense anyway
+
+    Http2Session::read
+        read(session)
+        wait for new 
+
+    Session::recv
+        read(session)
+        wait for new session
+
+
+Http2Stream::read
+        acquire session.read_lock
+
+        lock(success.lock) do
+            read(session)
+        end
+
+
+        function read(session::Session)::Option{Http2Stream}
+
+            any write: session.read_lock.notify()
+"""
+
+@testset "Signal lock" begin
+    m0 = Nghttp2.SignalLock()
+    s1 = Nghttp2.SignalLock()
+    s2 = Nghttp2.SignalLock()
+    r1 = Nghttp2.SignalLock()
+    r2 = Nghttp2.SignalLock()
+
+    @async begin
+        lock(r1) do
+            Nghttp2.notify(r1)
+        end
+        lock(m0) do
+            Nghttp2.wait(m0)
+        end
+        lock(s1) do
+            Nghttp2.notify(s1)
+        end
     end
-    
-    lock(s) do
-        Nghttp2.wait(s)
+
+    @async begin
+        lock(r2) do
+            Nghttp2.notify(r2)
+        end
+        lock(m0) do
+            Nghttp2.wait(m0)
+        end
+        lock(s2) do
+            Nghttp2.notify(s2)
+        end
+    end
+
+    lock(r1) do
+        Nghttp2.wait(r1)
+    end
+    lock(r2) do
+        Nghttp2.wait(r2)
+    end
+
+    sleep(1)
+    lock(m0) do
+        Nghttp2.notify(m0)
+    end
+
+    lock(s1) do
+        Nghttp2.wait(s1)
+    end
+
+    lock(s2) do
+        Nghttp2.wait(s2)
     end
 end
 

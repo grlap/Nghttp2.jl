@@ -54,15 +54,25 @@ Base.lock(e::SignalLock) = lock(e.notify)
 
 Base.unlock(e::SignalLock) = unlock(e.notify)
 
+"""
+    Waits for a lock notification.
+    If the lock is set, unset and return immediately.
+    Otherwise, wait until condition notification, then unset and return immediately.
+"""
 function wait(e::SignalLock)
     Base.assert_havelock(e.notify)
-    while !e.set
+    if !e.set
         Threads.wait(e.notify)
     end
     e.set = false
     nothing
 end
 
+"""
+    Notifies the lock.
+    If the lock is unset, leave the function.
+    Otherwise, set the lock, and notify the condition.
+"""
 function notify(e::SignalLock)
     Base.assert_havelock(e.notify)
     if !e.set
@@ -436,9 +446,9 @@ end
     Reads available data from the http2 stream.
 """
 function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
-    wait(http2_stream.lock)
-
     lock(http2_stream.lock) do
+        wait(http2_stream.lock)
+
         result_buffer = read(http2_stream.buffer)
         return result_buffer
     end
@@ -450,16 +460,16 @@ end
 function read_all(http2_stream::Http2Stream)::Vector{UInt8}
     # Create IOBuffer and copy chunks until we read eof.
     result_stream = IOBuffer()
-    eof_stream = true
+    eof_stream = false
 
-    while eof_stream
+    while !eof_stream
         lock(http2_stream.lock) do
             wait(http2_stream.lock)
 
             buffer_chunk = read(http2_stream.buffer)
             write(result_stream, buffer_chunk)
 
-            eof_stream = !http2_stream.eof
+            eof_stream = http2_stream.eof
         end
     end
 
@@ -467,7 +477,7 @@ function read_all(http2_stream::Http2Stream)::Vector{UInt8}
     return result_stream.data
 end
 
-function write2(http2_stream::Http2Stream, out_buffer)
+function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
     lock(http2_stream.lock) do
         # Write received data to the steam and notify reader.
         write(http2_stream.buffer, out_buffer)
@@ -891,7 +901,7 @@ function on_data_chunk_recv_callback(nghttp2_session::Nghttp2Session, flags::UIn
     # Write received data to the received stream buffer.
     recv_stream = session.recv_streams[stream_id]
 
-    write2(recv_stream, data)
+    write(recv_stream, data)
 
     result::Cint = 0
     return result
