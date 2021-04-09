@@ -65,58 +65,6 @@ Http2Stream::read
             any write: session.read_lock.notify()
 """
 
-@testset "Signal lock" begin
-    m0 = Nghttp2.SignalLock()
-    s1 = Nghttp2.SignalLock()
-    s2 = Nghttp2.SignalLock()
-    r1 = Nghttp2.SignalLock()
-    r2 = Nghttp2.SignalLock()
-
-    @async begin
-        lock(r1) do
-            Nghttp2.notify(r1)
-        end
-        lock(m0) do
-            Nghttp2.wait(m0)
-        end
-        lock(s1) do
-            Nghttp2.notify(s1)
-        end
-    end
-
-    @async begin
-        lock(r2) do
-            Nghttp2.notify(r2)
-        end
-        lock(m0) do
-            Nghttp2.wait(m0)
-        end
-        lock(s2) do
-            Nghttp2.notify(s2)
-        end
-    end
-
-    lock(r1) do
-        Nghttp2.wait(r1)
-    end
-    lock(r2) do
-        Nghttp2.wait(r2)
-    end
-
-    sleep(1)
-    lock(m0) do
-        Nghttp2.notify(m0)
-    end
-
-    lock(s1) do
-        Nghttp2.wait(s1)
-    end
-
-    lock(s2) do
-        Nghttp2.wait(s2)
-    end
-end
-
 # Verifies calling into Nghttp library.
 @testset "Nghttp2 " begin
     info = nghttp2_version()
@@ -143,9 +91,9 @@ end
             "user-agent" => "curl/7.75.0"
         ])
 
-    stream1 = Nghttp2.recv!(client_session.session)
-    stream2 = Nghttp2.recv!(client_session.session)
-    stream3 = Nghttp2.try_recv!(client_session.session)
+    stream1 = recv!(client_session.session)
+    stream2 = recv!(client_session.session)
+    stream3 = try_recv!(client_session.session)
 
     lengths = (length(read_all(stream2)), length(read_all(stream1)))
     @test minimum(lengths) == 6616
@@ -186,8 +134,8 @@ end
 
     @show stream_id1
 
-    stream1 = Nghttp2.recv!(cs.session)
-    stream2 = Nghttp2.recv!(cs.session)
+    stream1 = recv!(cs.session)
+    stream2 = recv!(cs.session)
 
     println("[#TODO] => Wait too long")
 

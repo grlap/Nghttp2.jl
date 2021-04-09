@@ -42,47 +42,6 @@ using Sockets
 const Option{T} = Union{Nothing, T} where {T}
 
 """
-    Signal lock. ReentrantLock with wait and notify functionality.
-"""
-mutable struct SignalLock <: Base.AbstractLock
-    notify::Threads.Condition
-    set::Bool
-    SignalLock() = new(Threads.Condition(), false)
-end
-
-Base.lock(e::SignalLock) = lock(e.notify)
-
-Base.unlock(e::SignalLock) = unlock(e.notify)
-
-"""
-    Waits for a lock notification.
-    If the lock is set, unset and return immediately.
-    Otherwise, wait until condition notification, then unset and return immediately.
-"""
-function wait(e::SignalLock)
-    Base.assert_havelock(e.notify)
-    if !e.set
-        Threads.wait(e.notify)
-    end
-    e.set = false
-    nothing
-end
-
-"""
-    Notifies the lock.
-    If the lock is unset, leave the function.
-    Otherwise, set the lock, and notify the condition.
-"""
-function notify(e::SignalLock)
-    Base.assert_havelock(e.notify)
-    if !e.set
-        e.set = true
-        Threads.notify(e.notify)
-    end
-    nothing
-end
-
-"""
     Error codes used by Nghttp2 library.
 """
 @enum(Nghttp2Error::Int32,
@@ -307,7 +266,7 @@ end
 free(nv_pair::NVPair) = Libc.free(nv_pair.name)
 
 """
-    Helper functionst to convert vector of string pairs to vector of NVPair.
+    Helper functions to convert vector of string pairs to vector of NVPair.
 """
 const NVPairs = Vector{NVPair}
 
@@ -447,11 +406,12 @@ mutable struct Http2Stream <: IO
 end
 
 """
-    Reads available data from the http2 stream.
+    Reads available data from the HTTP2 stream.
 """
 function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
     should_read = true
 
+    # Process HTTP2 stack until there is no more available data in HTTP2 stream.
     while should_read
         lock(http2_stream.lock) do
             if !eof(http2_stream.buffer) || eof(http2_stream)
@@ -468,16 +428,11 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
     end
 
     lock(http2_stream.lock) do
-        if !eof(http2_stream.buffer)
-            result_buffer = read(http2_stream.buffer)
-            return result_buffer
-        end
-
-        if (eof(http2_stream))
-            return Vector{UInt8}()
-        end
+        result_buffer = read(http2_stream.buffer)
+        return result_buffer
     end
 end
+
 
 function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
     lock(http2_stream.lock) do
@@ -486,7 +441,10 @@ function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
     end
 end
 
-function Base.eof(http2_stream::Http2Stream)
+"""
+ Test whether an HTTP2 stream is at end-of-file.
+"""
+function Base.eof(http2_stream::Http2Stream)::Bool
     return http2_stream.eof && eof(http2_stream.buffer)
 end
 
@@ -514,13 +472,6 @@ mutable struct Session <: AbstractSession
             ReentrantLock())
 end
 
-"""
-    Established nghttp2 sessions.
-
-    user_data::Ptr{Cvoid} to Session mapping.
-
-    Allows to retrive Http2.Session in nghttp2 callbacks from nghttp2 session user data.
-"""
 const SessionIdCounter = Threads.Atomic{Int64}(1)
 
 """
@@ -533,7 +484,7 @@ function session_from_data(user_data::Ptr{Cvoid})::Session
 end
 
 """
-    Sets the session object in nghttp2session structure.
+    Sets the session object in Nghttp2Session structure.
     The Session object must be pinned.
 """
 function session_set_data(session::Session)
@@ -545,7 +496,7 @@ function session_set_data(session::Session)
 end
 
 """
-    Creates an instance of Nghttp2 options.
+    Creates an instance of Nghttp2Options.
 """
 function nghttp2_option_new()::Nghttp2Option
     nghttp2_option = Nghttp2Option(C_NULL)
@@ -925,11 +876,10 @@ function on_error_callback(
     session = session_from_data(user_data)
     println("on_error_callback session_id:$(session.session_id) nghtt2_error_code: $(lib_error_code)")
 
-    # Create Http2 exception object, include Nghttp2 error.
+    # Create HTTP2 exception object, include Nghttp2 error.
     error = Http2ProtocolException(lib_error_code, unsafe_string(msg))
 
     lock(session.lock) do
-        # TODO, signal all the stream readers
         session.exception = error
     end
 
@@ -989,14 +939,13 @@ end
 function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid}):Cint
     # Get the server session object.
     session = session_from_data(user_data)
-    println("Stream closed: $(stream_id) $(error_code)")
 
     result::Cint = 0
     return result
 end
 
 """
-    Nghttp callbacks.
+    Nghttp2 callbacks.
 """
 struct Nghttp2Callbacks
     on_recv_callback_ptr::Ptr{Nothing}
@@ -1034,7 +983,7 @@ struct Nghttp2Callbacks
 end
 
 """
-    Http2 session.
+    HTTP2 session.
 """
 function submit_settings(session::Session, settings::Vector{SettingsEntry})
     GC.@preserve session begin
@@ -1101,18 +1050,20 @@ function recv!(session::Session)::Option{Http2Stream}
 
     while is_reading
         lock(session.lock) do
-            # Rethrow if errors occurred.
+            # Throw exception if errors occurred.
             if (has_errors(session))
                 throw(session.exception)
             end
 
+            # Break, if there is no data available in the session's IO and
+            # there are no more HTTP2 streams to return.
             if eof(session.io) || !isempty(session.recv_streams_id)
                 is_reading = false
             end
         end
 
         if is_reading
-            # Process received data though the HTTP2 receive stack.
+            # Process received data through the HTTP2 stack.
             internal_read!(session)
             continue
         end
@@ -1121,7 +1072,7 @@ function recv!(session::Session)::Option{Http2Stream}
     end
 
     lock(session.lock) do
-        # If available, return new Http2Stream.
+        # If available, return a new HTTP2 stream.
         if !isempty(session.recv_streams_id)
             recv_stream_id = dequeue!(session.recv_streams_id)
             recv_stream = session.recv_streams[recv_stream_id]
@@ -1141,7 +1092,7 @@ end
 """
 function try_recv!(session::Session)::Option{Http2Stream}
     lock(session.lock) do
-        # Rethrow if errors occurred.
+        # Throw exception if errors occurred.
         if (has_errors(session))
             throw(session.exception)
         end
@@ -1160,7 +1111,7 @@ function try_recv!(session::Session)::Option{Http2Stream}
 end
 
 """
-    Send the data in IO stream via HTTP2 session.
+    Sends the data in IO stream via HTTP2 session.
 """
 function Sockets.send(
     session::Session,
@@ -1204,7 +1155,11 @@ function Sockets.send(
     finalize(trailers)
 end
 
-function submit_request(session::Session, send_buffer::IOBuffer, header::StringPairs = StringPairs(), trailer::StringPairs = StringPairs())
+function submit_request(
+    session::Session,
+    send_buffer::IOBuffer,
+    header::StringPairs = StringPairs(),
+    trailer::StringPairs = StringPairs())
     println("submit_request")
 
     headers::NVPairs = convert_to_nvpairs(header)
@@ -1248,7 +1203,7 @@ end
 """
     Public API.
 
-    Wrapper classes around Http2.Session.
+    Wrapper classes around Http2Session.
 """
 
 struct ClientSession
