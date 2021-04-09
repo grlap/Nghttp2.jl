@@ -3,6 +3,19 @@ using OpenSSL
 using Nghttp2
 using Test
 
+function read_all(io::IO)::Vector{UInt8}
+    # Create IOBuffer and copy chunks until we read eof.
+    result_stream = IOBuffer()
+
+    while !eof(io)
+        buffer_chunk = read(io)
+        write(result_stream, buffer_chunk)
+    end
+
+    seekstart(result_stream)
+    return result_stream.data
+end
+
 """
     recv!
 
@@ -132,8 +145,9 @@ end
 
     stream1 = Nghttp2.recv!(client_session.session)
     stream2 = Nghttp2.recv!(client_session.session)
+    stream3 = Nghttp2.try_recv!(client_session.session)
 
-    lengths = (length(read_all(stream1)), length(read_all(stream2)))
+    lengths = (length(read_all(stream2)), length(read_all(stream1)))
     @test minimum(lengths) == 6616
     @test maximum(lengths) == 39082
 
