@@ -32,7 +32,7 @@ OpenSSL:
 
 module Nghttp2
 
-export send, recv!, try_recv!, submit_request, request, nghttp2_version, read, eof
+export send, recv, try_recv, submit_request, request, nghttp2_version, read, eof
 
 using nghttp2_jll
 using BitFlags
@@ -1045,7 +1045,7 @@ end
 """
     Receive from the session.
 """
-function recv!(session::Session)::Option{Http2Stream}
+function Sockets.recv(session::Session)::Option{Http2Stream}
     is_reading = true
 
     while is_reading
@@ -1090,7 +1090,7 @@ end
     Returns available Http2Streams.
     If there are no active Http2Streams, returns nothing.
 """
-function try_recv!(session::Session)::Option{Http2Stream}
+function try_recv(session::Session)::Option{Http2Stream}
     lock(session.lock) do
         # Throw exception if errors occurred.
         if (has_errors(session))

@@ -17,7 +17,7 @@ function read_all(io::IO)::Vector{UInt8}
 end
 
 """
-    recv!
+    recv
 
         session reading loop
             read and dispatch
@@ -91,9 +91,11 @@ end
             "user-agent" => "curl/7.75.0"
         ])
 
-    stream1 = recv!(client_session.session)
-    stream2 = recv!(client_session.session)
-    stream3 = try_recv!(client_session.session)
+    stream1 = recv(client_session.session)
+    stream2 = recv(client_session.session)
+    stream3 = try_recv(client_session.session)
+
+    @test isnothing(stream3)
 
     lengths = (length(read_all(stream2)), length(read_all(stream1)))
     @test minimum(lengths) == 6616
@@ -134,8 +136,8 @@ end
 
     @show stream_id1
 
-    stream1 = recv!(cs.session)
-    stream2 = recv!(cs.session)
+    stream1 = recv(cs.session)
+    stream2 = recv(cs.session)
 
     println("[#TODO] => Wait too long")
 
@@ -159,7 +161,7 @@ end
             "accept" => "text/html"
         ])
 
-    @show recv_stream_id2, stream2 = Http2.recv!(cs.session)
+    @show recv_stream_id2, stream2 = Http2.recv(cs.session)
     """
 end
 
@@ -180,8 +182,8 @@ function test_client()
     iob = IOBuffer(data)
     @show stream_id2 = submit_request(client_session, iob, Http2.gRPC_Default_Request, Http2.gRPC_Defautl_Trailer)
 
-    @show recv_stream_id1, stream1 = recv!(client_session)
-    @show recv_stream_id2, stream2 = recv!(client_session)
+    @show recv_stream_id1, stream1 = recv(client_session)
+    @show recv_stream_id2, stream2 = recv(client_session)
 
     @show recv_buffer1 = IOBuffer(read(stream1.buffer))
     @show recv_buffer2 = IOBuffer(read(stream2.buffer))
@@ -200,7 +202,7 @@ function test_server()
     result = Http2.nghttp2_session_send(http2_session.nghttp2_session)
 
     while true
-        stream_id, stream = recv!(http2_session)
+        stream_id, stream = recv(http2_session)
 
         if (stream_id == 0)
             break
