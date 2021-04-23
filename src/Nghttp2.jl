@@ -800,7 +800,7 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
         add_new_stream = true
     end
 
-    # TODO workaround
+    # TODO workaround, how to detect when to add a new frame ??
     if (add_new_stream)
         # Create a new stream.
         lock(session.lock) do
@@ -991,7 +991,7 @@ function submit_settings(session::Session, settings::Vector{SettingsEntry})
     GC.@preserve session begin
         session_set_data(session)
         result = nghttp2_session_submit_settings(session.nghttp2_session, settings)
-        # result = nghttp2_session_send(session.nghttp2_session)
+        result = nghttp2_session_send(session.nghttp2_session)
         return result
     end
 end
@@ -1057,7 +1057,6 @@ function Sockets.recv(session::Session)::Option{Http2Stream}
                 throw(session.exception)
             end
 
-            println("$(bytesavailable(session.io)) $(!isempty(session.recv_streams_id))")
             # Break, if there is no data available in the session's IO and
             # there are no more HTTP2 streams to return.
             if !isempty(session.recv_streams_id) || eof(session.io)
@@ -1105,7 +1104,6 @@ function try_recv(session::Session)::Option{Http2Stream}
             recv_stream_id = dequeue!(session.recv_streams_id)
             recv_stream = session.recv_streams[recv_stream_id]
 
-            println("[] Session: $(session.session_id) returns a new Stream: $(recv_stream.stream_id)")
             return recv_stream
         end
 
@@ -1122,7 +1120,6 @@ function Sockets.send(
     send_stream::IO,
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
-    println("send on $(session) $(stream_id)");
 
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
@@ -1163,7 +1160,6 @@ function submit_request(
     send_buffer::IOBuffer,
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
-    println("submit_request")
 
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
@@ -1238,21 +1234,5 @@ function __init__()
     println("$(@__MODULE__)::__init")
     NGHTTP2_CALLBACKS.x = Nghttp2Callbacks()
 end
-
-"""
-    SERVER.
-"""
-
-const gRPC_Default_Status_200 = [":status" => "200", "content-type" => "application/grpc"]
-const gRPC_Defautl_Trailer = ["grpc-status" => "0"]
-
-const gRPC_Default_Request = [
-    ":method" => "POST",
-    ":path" => "/MlosAgent.ExperimentManagerService/Echo",
-    ":authority" => "localhost:5000",
-    ":scheme" => "http",
-    "content-type" => "application/grpc",
-    "user-agent" => "grpc-dotnet/2.29.0.0",
-    "grpc-accept-encoding" => "identity,gzip"]
 
 end # module Nghttp2

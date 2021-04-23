@@ -149,20 +149,6 @@ end
     @test minimum(header_lengths) == 16
     @test maximum(header_lengths) == 20
 
-    """
-    @show stream_id2 = Http2.submit_request(
-        cs.session, iob,
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "http",
-            ":authority" => "www.nghttp2.org",
-            "user-agent" => "curl/7.75.0",
-            "accept" => "text/html"
-        ])
-
-    @show recv_stream_id2, stream2 = Http2.recv(cs.session)
-    """
 end
 
 function test_client()
@@ -189,30 +175,23 @@ function test_server()
     socket = listen(5000)
     accepted_socket = accept(socket)
 
-    http2_session = Http2.server_session_new(accepted_socket)
+    server_session = Nghttp2.server_session_new(accepted_socket)
 
-    settings = Vector{Http2.SettingsEntry}([Http2.SettingsEntry(Http2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
-
-    result = Http2.nghttp2_session_submit_settings(http2_session.nghttp2_session, settings)
-
-    result = Http2.nghttp2_session_send(http2_session.nghttp2_session)
+    settings = Vector{Nghttp2.SettingsEntry}([Nghttp2.SettingsEntry(Nghttp2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
+    result = Nghttp2.submit_settings(server_session, settings)
+    #result = Nghttp2.nghttp2_session_send(server_session)
 
     while true
-        stream_id, stream = recv(http2_session)
+        stream = recv(server_session)
+        @show stream
 
-        if (stream_id == 0)
-            break
-        end
-
-        send_buffer = IOBuffer(read(stream.buffer))
-
+        send_buffer = IOBuffer(read(stream))
         @show send_buffer
 
         send(http2_session,
             stream_id,
             send_buffer,
-            Http2.gRPC_Default_Status_200,
-            Http2.gRPC_Defautl_Trailer)
+            Http2.gRPC_Default_Status_200)
     end
 end
 
