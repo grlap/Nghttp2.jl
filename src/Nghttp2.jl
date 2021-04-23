@@ -33,7 +33,7 @@ OpenSSL:
 module Nghttp2
 
 export Http2ClientSession, Http2ServerSession
-export send, recv, try_recv, submit_request, request, nghttp2_version, read, eof
+export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof
 
 using nghttp2_jll
 using BitFlags
@@ -1119,9 +1119,13 @@ end
 function send(
     session::Session,
     stream_id::Int32,
-    send_stream::IO,
+    send_buffer::IO,
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
+
+    println("send nghttp2_submit_response stream_id: $(stream_id)")
+    @show header
+    @show trailer
 
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
@@ -1146,8 +1150,10 @@ function send(
                     pointer(headers),
                     length(headers),
                     pointer_from_objref(data_provider))
+                @show result
 
                 result = nghttp2_session_send(session.nghttp2_session)
+                @show result
             end
         end
     end
@@ -1227,13 +1233,12 @@ function submit_request(
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
 
-    return send(http2_client_session.session,
+    return send(
+        http2_client_session.session,
         io,
         header,
         trailer)
 end
-
-
 
 """
     Http2 server session.
@@ -1242,11 +1247,32 @@ struct Http2ServerSession
     session::Session
 end
 
-function accept(io::IO)::Http2ServerSession
+function from_accepted(io::IO)::Http2ServerSession
     session = server_session_new(io)
     result =  submit_settings(session, DefaultSettings)
 
     return Http2ServerSession(session)
+end
+
+function Sockets.recv(http2_server_session::Http2ServerSession)
+    return recv(http2_server_session.session)
+end
+
+function submit_response(
+    http2_stream::Http2Stream,
+    io::IO,
+    header::StringPairs = StringPairs(),
+    trailer::StringPairs = StringPairs())
+
+    session = http2_stream.session
+    stream_id = http2_stream.stream_id
+
+    return send(
+        session,
+        stream_id,
+        io,
+        header,
+        trailer)
 end
 
 """
