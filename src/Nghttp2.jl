@@ -228,7 +228,7 @@ const DefaultSettings =
         [
             SettingsEntry(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100),
             SettingsEntry(NGHTTP2_SETTINGS_ENABLE_PUSH, 1),
-            SettingsEntry(NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 4*65536),
+            SettingsEntry(NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65536),
         ])
 
 """
@@ -784,15 +784,14 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
     if (frame_header.type == UInt8(NGHTTP2_HEADERS))
         headers_frame = unsafe_load(Ptr{Nghttp2HeadersFrame}(frame.ptr))
 
-        ## HERE is missing
-
         is_server::Bool = is_nghttp2_server_session(nghttp2_session)
 
+        #TODO verify the logic to detect a new steam is correct
         #|| headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE
         #TODO rewrite this
         #TODO bug here we count incoming outgoing streams
         if ((is_server && headers_frame.cat == NGHTTP2_HCAT_REQUEST) ||
-            (!is_server && (headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE)))
+            (!is_server && (headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE || headers_frame.cat == Nghttp2.NGHTTP2_HCAT_RESPONSE)))
             add_new_stream = true
         end
     end
@@ -801,11 +800,14 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
         add_new_stream = true
     end
 
+    # TODO workaround
     if (add_new_stream)
         # Create a new stream.
         lock(session.lock) do
-            session.recv_streams[frame_header.stream_id] = Http2Stream(session, frame_header.stream_id)
-            enqueue!(session.recv_streams_id, frame_header.stream_id)
+            if !haskey(session.recv_streams, frame_header.stream_id)
+                session.recv_streams[frame_header.stream_id] = Http2Stream(session, frame_header.stream_id)
+                enqueue!(session.recv_streams_id, frame_header.stream_id)
+            end
         end
     end
 
@@ -873,7 +875,7 @@ function on_error_callback(
     msg::Ptr{UInt8},
     len::Csize_t,
     user_data::Ptr{Cvoid})::Cint
-    session = session_from_data(user_data)
+    session = session_from_data(user_data)::Cint
     println("on_error_callback session_id:$(session.session_id) nghtt2_error_code: $(lib_error_code)")
 
     # Create HTTP2 exception object, include Nghttp2 error.
@@ -1055,9 +1057,10 @@ function Sockets.recv(session::Session)::Option{Http2Stream}
                 throw(session.exception)
             end
 
+            println("$(bytesavailable(session.io)) $(!isempty(session.recv_streams_id))")
             # Break, if there is no data available in the session's IO and
             # there are no more HTTP2 streams to return.
-            if eof(session.io) || !isempty(session.recv_streams_id)
+            if !isempty(session.recv_streams_id) || eof(session.io)
                 is_reading = false
             end
         end
@@ -1213,7 +1216,6 @@ end
 function open(io::IO)::ClientSession
     session = client_session_new(io)
     result =  submit_settings(session, DefaultSettings)
-    result = submit_window_update(session, Int32(0), Int32(4*65536))
 
     client_session = ClientSession(session)
 end

@@ -166,27 +166,23 @@ end
 end
 
 function test_client()
-    socket = connect("localhost", 5000)
-    @show socket
+    tcp_connection = connect("localhost", 5001)
+    tcp_connection = connect("localhost", 5001)
 
-    client_session = Nghttp2.client_session_new(socket)
+    client_session = Nghttp2.open(tcp_connection)
 
-    settings = Vector{Http2.SettingsEntry}([Http2.SettingsEntry(Http2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
-    result = Http2.nghttp2_session_submit_settings(client_session.nghttp2_session, settings)
+    #settings = Vector{Http2.SettingsEntry}([Http2.SettingsEntry(Http2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
+    #result = Http2.nghttp2_session_submit_settings(client_session.nghttp2_session, settings)
 
     data = UInt8[0x00, 0x00, 0x00, 0x00, 0x11, 0x0a, 0x0f, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x47, 0x72, 0x65, 0x65, 0x74, 0x65, 0x72, 0x20, 0x32]
 
     iob = IOBuffer(data)
-    @show stream_id1 = submit_request(client_session, iob, Http2.gRPC_Default_Request, Http2.gRPC_Defautl_Trailer)
+    @show stream_1 = Nghttp2.submit_request(client_session.session, iob, Nghttp2.gRPC_Default_Request, Nghttp2.gRPC_Defautl_Trailer)
 
-    iob = IOBuffer(data)
-    @show stream_id2 = submit_request(client_session, iob, Http2.gRPC_Default_Request, Http2.gRPC_Defautl_Trailer)
+    stream1 = recv(client_session.session)
+    response = read_all(stream1)
 
-    @show recv_stream_id1, stream1 = recv(client_session)
-    @show recv_stream_id2, stream2 = recv(client_session)
-
-    @show recv_buffer1 = IOBuffer(read(stream1.buffer))
-    @show recv_buffer2 = IOBuffer(read(stream2.buffer))
+    @show response
 end
 
 function test_server()
