@@ -79,8 +79,8 @@ end
 
     # TODO empty request
     io = IOBuffer()
-    stream_id1 = Nghttp2.submit_request(
-        client_session.session,
+    stream_id1 = submit_request(
+        client_session,
         io,
         [
             ":method" => "GET",
@@ -120,11 +120,11 @@ end
     # TODO expose connect
     result = connect(ssl_stream)
 
-    cs = Nghttp2.open(ssl_stream)
+    client_session = Nghttp2.open(ssl_stream)
 
     iob = IOBuffer()
-    stream_id1 = Nghttp2.submit_request(
-        cs.session, iob,
+    stream_id1 = submit_request(
+        client_session, iob,
         [
             ":method" => "GET",
             ":path" => "/",
@@ -136,8 +136,8 @@ end
 
     @show stream_id1
 
-    stream1 = recv(cs.session)
-    stream2 = recv(cs.session)
+    stream1 = recv(client_session.session)
+    stream2 = recv(client_session.session)
 
     println("[#TODO] => Wait too long")
 
@@ -163,7 +163,7 @@ function test_client()
     data = UInt8[0x00, 0x00, 0x00, 0x00, 0x11, 0x0a, 0x0f, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x47, 0x72, 0x65, 0x65, 0x74, 0x65, 0x72, 0x20, 0x32]
 
     iob = IOBuffer(data)
-    @show stream_1 = Nghttp2.submit_request(client_session.session, iob, Nghttp2.gRPC_Default_Request, Nghttp2.gRPC_Defautl_Trailer)
+    @show stream_1 = submit_request(client_session.session, iob, Nghttp2.gRPC_Default_Request, Nghttp2.gRPC_Defautl_Trailer)
 
     stream1 = recv(client_session.session)
     response = read_all(stream1)

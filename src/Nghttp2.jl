@@ -32,6 +32,7 @@ OpenSSL:
 
 module Nghttp2
 
+export Http2ClientSession, Http2ServerSession
 export send, recv, try_recv, submit_request, request, nghttp2_version, read, eof
 
 using nghttp2_jll
@@ -586,7 +587,7 @@ end
 
     Creates a new server session and stores the session object in the lookup dictionary.
 """
-function server_session_new(socket::TCPSocket)::Session
+function server_session_new(io::IO)::Session
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
@@ -599,9 +600,10 @@ function server_session_new(socket::TCPSocket)::Session
         nghttp2_session_callbacks,
         C_NULL)
 
-    session = Session(socket, nghttp2_session)
+    session = Session(io, nghttp2_session)
 
     nghttp2_session_callbacks_del(nghttp2_session_callbacks)
+
     return session
 end
 
@@ -1114,7 +1116,7 @@ end
 """
     Sends the data in IO stream via HTTP2 session.
 """
-function Sockets.send(
+function send(
     session::Session,
     stream_id::Int32,
     send_stream::IO,
@@ -1155,7 +1157,7 @@ function Sockets.send(
     finalize(trailers)
 end
 
-function submit_request(
+function send(
     session::Session,
     send_buffer::IOBuffer,
     header::StringPairs = StringPairs(),
@@ -1205,20 +1207,46 @@ end
     Wrapper classes around Http2Session.
 """
 
-struct ClientSession
+"""
+    Http2 client session.
+"""
+struct Http2ClientSession
     session::Session
 end
 
-function open(io::IO)::ClientSession
+function open(io::IO)::Http2ClientSession
     session = client_session_new(io)
     result =  submit_settings(session, DefaultSettings)
 
-    client_session = ClientSession(session)
+    return Http2ClientSession(session)
 end
 
-function request(client_session::ClientSession, header::StringPairs)
-    println("request $(client_session) header:$(header)")
+function submit_request(
+    http2_client_session::Http2ClientSession,
+    io::IO,
+    header::StringPairs = StringPairs(),
+    trailer::StringPairs = StringPairs())
 
+    return send(http2_client_session.session,
+        io,
+        header,
+        trailer)
+end
+
+
+
+"""
+    Http2 server session.
+"""
+struct Http2ServerSession
+    session::Session
+end
+
+function accept(io::IO)::Http2ServerSession
+    session = server_session_new(io)
+    result =  submit_settings(session, DefaultSettings)
+
+    return Http2ServerSession(session)
 end
 
 """
