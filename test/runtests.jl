@@ -151,8 +151,20 @@ end
 
 end
 
+const DEFAULT_STATUS_200 = [":status" => "200", "content-type" => "application/grpc"]
+const DEFAULT_TRAILER = ["grpc-status" => "0"]
+
+const gRPC_Default_Request = [
+    ":method" => "POST",
+    ":path" => "/MlosAgent.ExperimentManagerService/Echo",
+    ":authority" => "localhost:5000",
+    ":scheme" => "http",
+    "content-type" => "application/grpc",
+    "user-agent" => "grpc-dotnet/2.29.0.0",
+    "grpc-accept-encoding" => "identity,gzip",
+    "te" => "trailers"]
+
 function test_client()
-    tcp_connection = connect("localhost", 5001)
     tcp_connection = connect("localhost", 5001)
 
     client_session = Nghttp2.open(tcp_connection)
@@ -163,9 +175,9 @@ function test_client()
     data = UInt8[0x00, 0x00, 0x00, 0x00, 0x11, 0x0a, 0x0f, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x47, 0x72, 0x65, 0x65, 0x74, 0x65, 0x72, 0x20, 0x32]
 
     iob = IOBuffer(data)
-    @show stream_1 = submit_request(client_session.session, iob, Nghttp2.gRPC_Default_Request, Nghttp2.gRPC_Defautl_Trailer)
-
+    @show stream_1 = submit_request(client_session, iob, gRPC_Default_Request)
     stream1 = recv(client_session.session)
+    @show stream1.headers
     response = read_all(stream1)
 
     @show response
