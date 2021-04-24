@@ -187,7 +187,7 @@ const NGHTTP2_FLAG_ACK = NGHTTP2_FLAG_END_STREAM
 @enum(Nghttp2SettingsId::UInt32,
     # SETTINGS_HEADER_TABLE_SIZE
     NGHTTP2_SETTINGS_HEADER_TABLE_SIZE = 0x01,
-    # SETTINGS_ENABLE_PUSH
+    # SETTINGS_ENABLE_PUSH, client only option.
     NGHTTP2_SETTINGS_ENABLE_PUSH = 0x02,
     # SETTINGS_MAX_CONCURRENT_STREAMS
     NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS = 0x03,
@@ -224,7 +224,14 @@ struct SettingsEntry
     value::UInt32
 end
 
-const DefaultSettings =
+const DEFAULT_SERVER_SETTINGS =
+    Vector{SettingsEntry}(
+        [
+            SettingsEntry(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100),
+            SettingsEntry(NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65536),
+        ])
+
+const DEFAULT_CLIENT_SETTINGS =
     Vector{SettingsEntry}(
         [
             SettingsEntry(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100),
@@ -873,15 +880,15 @@ end
 
 function on_error_callback(
     nghttp2_session::Nghttp2Session,
-    lib_error_code::Nghttp2Error,
+    lib_error_code::Cint,
     msg::Ptr{UInt8},
     len::Csize_t,
     user_data::Ptr{Cvoid})::Cint
-    session = session_from_data(user_data)::Cint
+    session = session_from_data(user_data)
     println("on_error_callback session_id:$(session.session_id) nghtt2_error_code: $(lib_error_code)")
 
     # Create HTTP2 exception object, include Nghttp2 error.
-    error = Http2ProtocolException(lib_error_code, unsafe_string(msg))
+    error = Http2ProtocolException(Nghttp2Error(lib_error_code), unsafe_string(msg))
 
     lock(session.lock) do
         session.exception = error
@@ -969,7 +976,7 @@ struct Nghttp2Callbacks
         on_header_recv_callback_ptr = @cfunction on_header_recv_callback Cint (Nghttp2Session, Nghttp2Frame, Ptr{UInt8}, Csize_t, Ptr{UInt8}, Csize_t, UInt8, Ptr{Cvoid})
         on_data_chunk_recv_callback_ptr = @cfunction on_data_chunk_recv_callback Cint (Nghttp2Session, UInt8, Cint, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
         on_send_callback_ptr = @cfunction on_send_callback Csize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
-        on_error_callback_ptr = @cfunction on_error_callback Cint (Nghttp2Session, Nghttp2Error, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
+        on_error_callback_ptr = @cfunction on_error_callback Cint (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
         on_data_source_read_callback_ptr = @cfunction on_data_source_read_callback Cssize_t (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{UInt32}, Ptr{Ptr{IOBuffer}}, Ptr{Cvoid})
         on_stream_close_callback_ptr = @cfunction on_stream_close_callback Cint (Nghttp2Session, Cint, UInt32, Ptr{Cvoid})
 
@@ -1029,7 +1036,7 @@ function internal_read!(session::Session)::Bool
     #TODO assert if there is a lock session.lock
 
     lock(session.read_lock) do
-        if !eof(session.io) && !has_errors(session)
+        if !has_errors(session) && !eof(session.io)
             available_bytes = bytesavailable(session.io)
             input_data = read(session.io, available_bytes)
 
@@ -1222,7 +1229,7 @@ end
 
 function open(io::IO)::Http2ClientSession
     session = client_session_new(io)
-    result =  submit_settings(session, DefaultSettings)
+    result =  submit_settings(session, DEFAULT_CLIENT_SETTINGS)
 
     return Http2ClientSession(session)
 end
@@ -1249,7 +1256,7 @@ end
 
 function from_accepted(io::IO)::Http2ServerSession
     session = server_session_new(io)
-    result =  submit_settings(session, DefaultSettings)
+    result = submit_settings(session, DEFAULT_SERVER_SETTINGS)
 
     return Http2ServerSession(session)
 end
