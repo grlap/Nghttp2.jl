@@ -414,11 +414,20 @@ mutable struct Http2Stream <: IO
 end
 
 """
+ Test whether an HTTP2 stream is at end-of-file.
+"""
+function Base.eof(http2_stream::Http2Stream)::Bool
+    lock(http2_stream.lock) do
+        return http2_stream.eof && eof(http2_stream.buffer)
+    end
+end
+
+"""
     Return the number of bytes available for reading before a read from this stream will block.
 """
 function Base.bytesavailable(http2_stream::Http2Stream)
     lock(http2_stream.lock) do
-        return bytesavailable
+        return bytesavailable(http2_stream.buffer)
     end
 end
 
@@ -431,7 +440,7 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
     # Process HTTP2 stack until there is no more available data in HTTP2 stream.
     while should_read
         lock(http2_stream.lock) do
-            if !eof(http2_stream.buffer) || eof(http2_stream)
+            if !eof(http2_stream.buffer) || http2_stream.eof
                 should_read = false
             end
         end
@@ -443,6 +452,8 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
         # Read failed
         break
     end
+
+    # TODO throw error from the stream or session
 
     lock(http2_stream.lock) do
         result_buffer = read(http2_stream.buffer)
@@ -459,7 +470,7 @@ function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
     # Process HTTP2 stack until there is no more available data in HTTP2 stream.
     while should_read
         lock(http2_stream.lock) do
-            if bytesavailable(http2_stream.buffer) >= nb || eof(http2_stream) 
+            if bytesavailable(http2_stream.buffer) >= nb || http2_stream.eof
                 should_read = false
             end
         end
@@ -472,24 +483,37 @@ function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
         break
     end
 
+    # TODO throw error from the stream or session
+
     lock(http2_stream.lock) do
+        if bytesavailable(http2_stream.buffer) < nb
+            throw(EOFError())
+        end
+    
         result_buffer = read(http2_stream.buffer, nb)
         return result_buffer
     end
 end
 
+function Base.read(http2_stream::Http2Stream, ::Type{UInt8})::UInt8
+    return read(http2_stream, Core.sizeof(UInt8))[begin + 0]
+end
+
+# TODO optimization
+#function unsafe_read(s::IO, p::Ptr{UInt8}, n::UInt)
+#   println("=> Base.read unsafe_read")
+#   for i = 1:n
+#    unsafe_store!(p, read(s, UInt8)::UInt8, i)
+#   end
+#    nothing
+#end
+
 function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
+    # TODO handle errors
     lock(http2_stream.lock) do
         # Write the data to the steam.
         write(http2_stream.buffer, out_buffer)
     end
-end
-
-"""
- Test whether an HTTP2 stream is at end-of-file.
-"""
-function Base.eof(http2_stream::Http2Stream)::Bool
-    return http2_stream.eof && eof(http2_stream.buffer)
 end
 
 """
@@ -953,11 +977,8 @@ function on_data_source_read_callback(
     GC.@preserve in_buffer unsafe_copyto!(buf, pointer(in_buffer), in_length)
 
     source_stream_eof = eof(data_source.send_stream)
-    source_has_trailer = length(data_source.trailer) != 0
-
-    # #VERIFY if the current logic is correct, 
-    # #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
-    # unsafe_store!(data_flags, UInt32(NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM))
+    # TODO verify if this is correct do not send trailer if there is more data to send
+    source_has_trailer = source_stream_eof && length(data_source.trailer) != 0
 
     send_data_flags::Nghttp2DataFlags = NGHTTP2_DATA_FLAG_NONE
     if source_stream_eof
