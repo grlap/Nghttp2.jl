@@ -33,7 +33,7 @@ OpenSSL:
 module Nghttp2
 
 export Http2ClientSession, Http2ServerSession
-export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof
+export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof, bytesavailable
 
 using nghttp2_jll
 using BitFlags
@@ -414,6 +414,15 @@ mutable struct Http2Stream <: IO
 end
 
 """
+    Return the number of bytes available for reading before a read from this stream will block.
+"""
+function Base.bytesavailable(http2_stream::Http2Stream)
+    lock(http2_stream.lock) do
+        return bytesavailable
+    end
+end
+
+"""
     Reads available data from the HTTP2 stream.
 """
 function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
@@ -441,10 +450,37 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
     end
 end
 
+"""
+    Reads at most nb bytes from from the HTTP2 stream.
+"""
+function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
+    should_read = true
+
+    # Process HTTP2 stack until there is no more available data in HTTP2 stream.
+    while should_read
+        lock(http2_stream.lock) do
+            if bytesavailable(http2_stream.buffer) >= nb || eof(http2_stream) 
+                should_read = false
+            end
+        end
+
+        if should_read && internal_read!(http2_stream.session)
+            continue
+        end
+
+        # Read failed
+        break
+    end
+
+    lock(http2_stream.lock) do
+        result_buffer = read(http2_stream.buffer, nb)
+        return result_buffer
+    end
+end
 
 function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
     lock(http2_stream.lock) do
-        # Write received data to the steam.
+        # Write the data to the steam.
         write(http2_stream.buffer, out_buffer)
     end
 end
