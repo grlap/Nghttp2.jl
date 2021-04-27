@@ -431,40 +431,7 @@ function Base.bytesavailable(http2_stream::Http2Stream)
     end
 end
 
-"""
-    Reads available data from the HTTP2 stream.
-"""
-function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
-    should_read = true
-
-    # Process HTTP2 stack until there is no more available data in HTTP2 stream.
-    while should_read
-        lock(http2_stream.lock) do
-            if !eof(http2_stream.buffer) || http2_stream.eof
-                should_read = false
-            end
-        end
-
-        if should_read && internal_read!(http2_stream.session)
-            continue
-        end
-
-        # Read failed
-        break
-    end
-
-    # TODO throw error from the stream or session
-
-    lock(http2_stream.lock) do
-        result_buffer = read(http2_stream.buffer)
-        return result_buffer
-    end
-end
-
-"""
-    Reads at most nb bytes from from the HTTP2 stream.
-"""
-function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
+function read_to_buffer(http2_stream::Http2Stream, nb::Integer)
     should_read = true
 
     # Process HTTP2 stack until there is no more available data in HTTP2 stream.
@@ -484,12 +451,31 @@ function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
     end
 
     # TODO throw error from the stream or session
+end
+
+"""
+    Reads available data from the HTTP2 stream.
+"""
+function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
+    read_to_buffer(http2_stream, 1)
+
+    lock(http2_stream.lock) do
+        result_buffer = read(http2_stream.buffer)
+        return result_buffer
+    end
+end
+
+"""
+    Reads at most nb bytes from from the HTTP2 stream.
+"""
+function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
+    read_to_buffer(http2_stream, nb)
 
     lock(http2_stream.lock) do
         if bytesavailable(http2_stream.buffer) < nb
             throw(EOFError())
         end
-    
+
         result_buffer = read(http2_stream.buffer, nb)
         return result_buffer
     end
@@ -499,15 +485,22 @@ function Base.read(http2_stream::Http2Stream, ::Type{UInt8})::UInt8
     return read(http2_stream, Core.sizeof(UInt8))[begin + 0]
 end
 
-# TODO optimization
-#function unsafe_read(s::IO, p::Ptr{UInt8}, n::UInt)
-#   println("=> Base.read unsafe_read")
-#   for i = 1:n
-#    unsafe_store!(p, read(s, UInt8)::UInt8, i)
-#   end
-#    nothing
-#end
+function Base.unsafe_read(http2_stream::Http2Stream, p::Ptr{UInt8}, nb::UInt)
+    read_to_buffer(http2_stream, nb)
 
+    lock(http2_stream.lock) do
+        if bytesavailable(http2_stream.buffer) < nb
+            throw(EOFError())
+        end
+
+        result_buffer = read(http2_stream.buffer, nb)
+        GC.@preserve result_buffer unsafe_copyto!(p, pointer(result_buffer), nb)
+    end
+end
+
+"""
+    Writes the data to the Http2 stream.
+"""
 function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
     # TODO handle errors
     lock(http2_stream.lock) do

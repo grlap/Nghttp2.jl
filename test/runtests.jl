@@ -16,6 +16,27 @@ function read_all(io::IO)::Vector{UInt8}
     return result_stream.data
 end
 
+function read_all_by_byte(io::IO)::Vector{UInt8}
+    iob = IOBuffer()
+    while !eof(io)
+        c = read(io, UInt8)
+        write(iob, c)
+    end
+
+    seek(iob, 0)
+
+    return read(iob)
+end
+
+# TODO optimization
+#function unsafe_read(s::IO, p::Ptr{UInt8}, n::UInt)
+#   println("=> Base.read unsafe_read")
+#   for i = 1:n
+#    unsafe_store!(p, read(s, UInt8)::UInt8, i)
+#   end
+#    nothing
+#end
+
 """
     recv
 
@@ -141,7 +162,7 @@ end
 
     println("[#TODO] => Wait too long")
 
-    lengths = (length(read_all(stream1)), length(read_all(stream2)))
+    lengths = (length(read_all(stream1)), length(read_all_by_byte(stream2)))
     @test minimum(lengths) == 6616
     @test maximum(lengths) == 39082
 
