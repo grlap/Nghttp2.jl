@@ -17,16 +17,18 @@
 
     Items:
 Nghttp2:
-[ ] add unit test
-[ ] responses
+[ ] add unit test, server, client
+[ ] unit test to submit_response with payload > 16 KB
+[ ] verify trailers are send at the end with request is send with multiple packages
+[ ] figure out when to create a receive stream on receving a header 
+[ ] submit_response should return a stream
+[ ] add unit test with invalid response
+[ ] Http2Stream return an error
 [ ] nghttp2_on_stream_close_callback, close stream on error
 [ ] nghttp2_on_data_chunk_recv_callback
     you should use nghttp2_on_frame_recv_callback to know all data frames are received
 [ ] #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
     does not send NGHTTP2_DATA_FLAG_NO_END_STREAM flag when sending request without trailer
-
-OpenSSL:
-[ ] Store the SSLContext
 
 """
 
