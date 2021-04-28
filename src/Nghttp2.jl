@@ -34,7 +34,7 @@ Nghttp2:
 
 module Nghttp2
 
-export Http2ClientSession, Http2ServerSession
+export Http2ClientSession, Http2ServerSession, Http2Stream
 export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof, bytesavailable
 
 using nghttp2_jll
@@ -908,11 +908,14 @@ function on_data_chunk_recv_callback(nghttp2_session::Nghttp2Session, flags::UIn
     data = Vector{UInt8}(undef, len)
     GC.@preserve data unsafe_copyto!(pointer(data), buf, len)
 
-    # TODO lock session, get http2_stream
     # Write received data to the received stream buffer.
-    recv_stream = session.recv_streams[stream_id]
+    local http2_stream::Http2Stream
 
-    write(recv_stream, data)
+    lock(session.lock) do
+        http2_stream = session.recv_streams[stream_id]
+    end
+
+    write(http2_stream, data)
 
     result::Cint = 0
     return result

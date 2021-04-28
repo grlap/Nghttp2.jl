@@ -13,7 +13,7 @@ function read_all(io::IO)::Vector{UInt8}
     end
 
     seekstart(result_stream)
-    return result_stream.data
+    return read(result_stream)
 end
 
 function read_all_by_byte(io::IO)::Vector{UInt8}
@@ -172,10 +172,10 @@ end
 
 end
 
-const DEFAULT_STATUS_200 = [":status" => "200", "content-type" => "application/grpc"]
+const DEFAULT_STATUS_200 = [":status" => "200"]
 const DEFAULT_TRAILER = ["grpc-status" => "0"]
 
-const gRPC_Default_Request = [
+const DEFAULT_REQUEST = [
     ":method" => "POST",
     ":path" => "/MlosAgent.ExperimentManagerService/Echo",
     ":authority" => "localhost:5000",
@@ -185,53 +185,56 @@ const gRPC_Default_Request = [
     "grpc-accept-encoding" => "identity,gzip",
     "te" => "trailers"]
 
-function test_client()
-    tcp_connection = connect("localhost", 5001)
+function test_server(socket::Sockets.TCPServer)
+    accepted_socket = accept(socket)
 
-    client_session = Nghttp2.open(tcp_connection)
+    server_session = Nghttp2.from_accepted(accepted_socket)
 
-    #settings = Vector{Http2.SettingsEntry}([Http2.SettingsEntry(Http2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
-    #result = Http2.nghttp2_session_submit_settings(client_session.nghttp2_session, settings)
+    request_stream::Http2Stream = recv(server_session)
+    @show request_stream
 
-    data = UInt8[0x00, 0x00, 0x00, 0x00, 0x11, 0x0a, 0x0f, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x47, 0x72, 0x65, 0x65, 0x74, 0x65, 0x72, 0x20, 0x32]
+    send_buffer = IOBuffer(read(request_stream))
+    println("===>sending $(send_buffer.data)")
 
-    iob = IOBuffer(data)
-    @show stream_1 = submit_request(client_session, iob, gRPC_Default_Request)
-    stream1 = recv(client_session.session)
-    @show stream1.headers
-    response = read_all(stream1)
+    submit_response(
+        request_stream,
+        send_buffer,
+        DEFAULT_STATUS_200)
 
-    @show response
+    close(socket)
 end
 
 function test_server()
     socket = listen(5000)
-    accepted_socket = accept(socket)
-
-    server_session = Nghttp2.server_session_new(accepted_socket)
-
-    settings = Vector{Nghttp2.SettingsEntry}([Nghttp2.SettingsEntry(Nghttp2.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100)])
-    result = Nghttp2.submit_settings(server_session, settings)
-    #result = Nghttp2.nghttp2_session_send(server_session)
-
-    while true
-        stream = recv(server_session)
-        @show stream
-
-        send_buffer = IOBuffer(read(stream))
-        @show send_buffer
-
-        send(http2_session,
-            stream_id,
-            send_buffer,
-            Http2.gRPC_Default_Status_200)
-    end
+    test_server(socket)
 end
+
+function test_client()
+    tcp_connection = connect(5000)
+
+    client_session = Nghttp2.open(tcp_connection)
+
+    data = UInt8[0x00, 0x00, 0x00, 0x00, 0x11, 0x0a, 0x0f, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x47, 0x72, 0x65, 0x65, 0x74, 0x65, 0x72, 0x20, 0x32]
+
+    iob = IOBuffer(data)
+    stream_1 = submit_request(client_session, iob, DEFAULT_REQUEST)
+    stream1 = recv(client_session.session)
+    response = read_all(stream1)
+
+    @test response == data
+end
+
 
 function http_test()
     # /opt/homebrew/opt/curl/bin/curl --http2 --http2-prior-knowledge -i http://www.nghttp2.org
+end
 
+@testset "Client/Server tests" begin
+    f1 = @async test_server()
+    f2 = @async test_client()
 
+    fetch(f1)
+    fetch(f2)
 end
 #test_client()
 
