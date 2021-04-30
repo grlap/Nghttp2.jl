@@ -478,11 +478,11 @@ function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
         break
     end
 
-    if !http2_stream.eof && a != bytesavailable(http2_stream.buffer)
-        size::Csize_t = bytesavailable(http2_stream.buffer) - a
-        println("server: session_consume: $(size)")
-        session_consume(http2_stream.session, http2_stream.stream_id, size)
-    end
+    ##if !http2_stream.eof && a != bytesavailable(http2_stream.buffer)
+    #    size::Csize_t = bytesavailable(http2_stream.buffer) - a
+    #    println("server: session_consume: $(size)")
+    #    session_consume(http2_stream.session, http2_stream.stream_id, size)
+    #end
 
     # TODO throw error from the stream or session
 end
@@ -495,6 +495,11 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
 
     lock(http2_stream.lock) do
         result_buffer = read(http2_stream.buffer)
+
+        if length(result_buffer) != 0
+            session_consume(http2_stream.session, http2_stream.stream_id, Csize_t(length(result_buffer)))
+        end
+
         return result_buffer
     end
 end
@@ -600,8 +605,7 @@ function nghttp2_option_new()::Nghttp2Option
         throw("error")
     end
 
-    # TODO
-    ##finalizer(nghttp2_option_del, nghttp2_option)
+    finalizer(nghttp2_option_del, nghttp2_option)
     return nghttp2_option
 end
 
@@ -676,11 +680,11 @@ function nghttp2_session_callbacks_new()
         callbacks,
         NGHTTP2_CALLBACKS.x.on_stream_close_callback_ptr);
 
-    ccall((:nghttp2_session_callbacks_set_data_source_read_length_callback, libnghttp2),
-        Cvoid,
-        (Nghttp2SessionCallbacks, Ptr{Cvoid},),
-        callbacks,
-        NGHTTP2_CALLBACKS.x.on_set_data_source_read_length_callback_ptr);
+#    ccall((:nghttp2_session_callbacks_set_data_source_read_length_callback, libnghttp2),
+#        Cvoid,
+#        (Nghttp2SessionCallbacks, Ptr{Cvoid},),
+#        callbacks,
+#        NGHTTP2_CALLBACKS.x.on_set_data_source_read_length_callback_ptr);
 
     finalizer(nghttp2_session_callbacks_del, callbacks)
     return callbacks
@@ -699,19 +703,15 @@ end
 function server_session_new(io::IO)::Session
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
-    nghttp2_option::Nghttp2Option = nghttp2_option_new()
-    nghttp2_option_set_no_auto_window_update(nghttp2_option, 1)
-
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
     result = ccall(
-        (:nghttp2_session_server_new2, libnghttp2),
+        (:nghttp2_session_server_new, libnghttp2),
         Cint,
-        (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}, Nghttp2Option),
+        (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}),
         nghttp2_session,
         nghttp2_session_callbacks,
-        C_NULL,
-        nghttp2_option)
+        C_NULL)
 
     session = Session(io, nghttp2_session)
 
@@ -818,20 +818,6 @@ function nghttp2_submit_window_update(
     return result
 end
 
-function nghttp2_session_consume(
-    nghttp2_session::Nghttp2Session,
-    stream_id::Int32,
-    size::Csize_t)
-    result = ccall((:nghttp2_session_consume, libnghttp2),
-        Cint,
-        (Nghttp2Session, Int32, Csize_t),
-        nghttp2_session,
-        stream_id,
-        size)
-
-    return result
-end
-
 """
     Errors.
 """
@@ -888,7 +874,6 @@ function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2F
     stream_id = frame_header.stream_id
     last_frame = stream_id != 0 && frame_header.flags & UInt8(NGHTTP2_FLAG_END_STREAM) != 0
 
-    println("received a frame: stream_id: $(stream_id) $(last_frame) flags: $(frame_header.flags)")
     if last_frame
         # Last frame in the stream detected, mark the stream as EOF.
         local http2_stream::Http2Stream
@@ -1052,8 +1037,6 @@ function on_data_source_read_callback(
         send_data_flags |= NGHTTP2_DATA_FLAG_EOF
     end
 
-    println("on_data_source_read_callback: $(in_length) $(buf_length) eof:$(source_stream_eof) $(send_data_flags) bytesavailable:$(bytesavailable(data_source.send_stream))")
-
     if source_has_trailer
         send_data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM
 
@@ -1153,24 +1136,11 @@ function submit_settings(session::Session, settings::Vector{SettingsEntry})
     end
 end
 
-function submit_window_update(session::Session, stream_id::Int32, window_size_increment::Int32)
-    GC.@preserve session begin
-        session_set_data(session)
-        result = nghttp2_submit_window_update(session.nghttp2_session, stream_id, window_size_increment)
-        @show result
-        result = nghttp2_session_send(session.nghttp2_session)
-        @show result
-        return result
-    end
-end
-
+#TODO remove and use send
 function session_consume(session::Session, stream_id::Int32, size::Csize_t)
     GC.@preserve session begin
         session_set_data(session)
-        result = nghttp2_session_consume(session.nghttp2_session, stream_id, size)
-        @show result
         result = nghttp2_session_send(session.nghttp2_session)
-        @show result
         return result
     end
 end
@@ -1319,6 +1289,18 @@ function send(
 
                 result = nghttp2_session_send(session.nghttp2_session)
                 @show result
+
+                result = nghttp2_session_send(session.nghttp2_session)
+
+                #TODO improve it
+                while !eof(send_buffer)
+                    eof(session.io)
+                    available_bytes = bytesavailable(session.io)
+                    input_data = read(session.io, available_bytes)
+                    nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+
+                    result = nghttp2_session_send(session.nghttp2_session)
+                end
             end
         end
     end
@@ -1336,8 +1318,6 @@ function send(
 
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
-
-    println("=> sending")
 
     GC.@preserve session send_buffer headers trailers begin
         session_set_data(session)
@@ -1363,37 +1343,16 @@ function send(
                     throw("error")
                 end
 
-                #nghttp2_submit_window_update(session.nghttp2_session, stream_id, Int32(64*1024))
-
                 result = nghttp2_session_send(session.nghttp2_session)
 
-                if !eof(send_buffer)
-                    println("###=> there is more to send")
-
-                    available_bytes = bytesavailable(session.io)
+                while !eof(send_buffer)
+                    #TODO improve it
                     eof(session.io)
-
-                    println(" ==> sender waiting for more: available_bytes: $(available_bytes)")
-
-                    #input_data = read(session.io, available_bytes)
-
-                    #GC.@preserve session begin
-                    #session_set_data(session)
-
-                    #nghttp2_session_mem_recv(session.nghttp2_session, input_data)
-
-
-                    #nghttp2_submit_window_update(session.nghttp2_session, stream_id, Int32(64*1024))
+                    available_bytes = bytesavailable(session.io)
+                    input_data = read(session.io, available_bytes)
+                    nghttp2_session_mem_recv(session.nghttp2_session, input_data)
 
                     result = nghttp2_session_send(session.nghttp2_session)
-#                    result = ccall((:nghttp2_submit_data, libnghttp2),
-#                        Cint,
-#                        (Nghttp2Session, UInt8, Cint, Ptr{Cvoid}),
-#                        session.nghttp2_session,
-#                        0,
-#                        stream_id,
-#                        pointer_from_objref(data_provider))
-#                    @show result
                 end
             end
         end

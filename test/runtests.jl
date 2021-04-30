@@ -8,7 +8,6 @@ function read_all(io::IO)::Vector{UInt8}
     result_stream = IOBuffer()
 
     while !eof(io)
-        println("read_all from io: $(bytesavailable(io)) $(eof(io))")
         buffer_chunk = read(io)
         write(result_stream, buffer_chunk)
     end
@@ -172,6 +171,8 @@ function test_client(request_io::IO = IOBuffer())
 
     @test length(response_data) == length(request_data)
     @test response_data == request_data
+
+    return response_data == request_data
 end
 
 
@@ -195,6 +196,6 @@ end
     f1 = @async test_server()
     f2 = @async test_client(iob)
 
-    fetch(f2)
+    @test fetch(f2) == true
     fetch(f1)
 end
