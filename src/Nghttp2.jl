@@ -479,7 +479,7 @@ function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
     end
 
     if !http2_stream.eof && a != bytesavailable(http2_stream.buffer)
-        size::Csize_t = bytesavailable(http2_stream.buffer)
+        size::Csize_t = bytesavailable(http2_stream.buffer) - a
         println("server: session_consume: $(size)")
         session_consume(http2_stream.session, http2_stream.stream_id, size)
     end
@@ -600,13 +600,22 @@ function nghttp2_option_new()::Nghttp2Option
         throw("error")
     end
 
-    finalizer(nghttp2_option_del, nghttp2_option)
+    # TODO
+    ##finalizer(nghttp2_option_del, nghttp2_option)
     return nghttp2_option
 end
 
 function nghttp2_option_del(nghttp2_option::Nghttp2Option)
     ccall((:nghttp2_option_del, libnghttp2), Cvoid, (Nghttp2Option,), nghttp2_option)
     nghttp2_option.ptr = C_NULL
+end
+
+function nghttp2_option_set_no_auto_window_update(nghttp2_option::Nghttp2Option, value::Cint)
+    ccall((:nghttp2_option_set_no_auto_window_update, libnghttp2),
+        Cvoid,
+        (Nghttp2Option, Cint),
+        nghttp2_option,
+        value)
 end
 
 """
@@ -690,15 +699,19 @@ end
 function server_session_new(io::IO)::Session
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
+    nghttp2_option::Nghttp2Option = nghttp2_option_new()
+    nghttp2_option_set_no_auto_window_update(nghttp2_option, 1)
+
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
     result = ccall(
-        (:nghttp2_session_server_new, libnghttp2),
+        (:nghttp2_session_server_new2, libnghttp2),
         Cint,
-        (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
+        (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}, Nghttp2Option),
         nghttp2_session,
         nghttp2_session_callbacks,
-        C_NULL)
+        C_NULL,
+        nghttp2_option)
 
     session = Session(io, nghttp2_session)
 
@@ -1154,8 +1167,8 @@ end
 function session_consume(session::Session, stream_id::Int32, size::Csize_t)
     GC.@preserve session begin
         session_set_data(session)
-        #result = nghttp2_session_consume(session.nghttp2_session, stream_id, size)
-        #@show result
+        result = nghttp2_session_consume(session.nghttp2_session, stream_id, size)
+        @show result
         result = nghttp2_session_send(session.nghttp2_session)
         @show result
         return result
