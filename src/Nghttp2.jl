@@ -17,7 +17,7 @@
 
     Items:
 Nghttp2:
-[ ] add unit test, server, client
+[x] add basic unit test, server, client
 [ ] unit test to submit_response with payload > 16 KB
 [ ] verify trailers are send at the end with request is send with multiple packages
 [ ] figure out when to create a receive stream on receving a header 
@@ -29,6 +29,32 @@ Nghttp2:
     you should use nghttp2_on_frame_recv_callback to know all data frames are received
 [ ] #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
     does not send NGHTTP2_DATA_FLAG_NO_END_STREAM flag when sending request without trailer
+
+[ ] Limit nghttp2_session_callbacks_set_data_source_read_length_callback
+    max 64kb is allowed
+    or try to nghttp2_submit_data
+
+
+        session reading loop
+            read and dispatch
+
+            single Http2Session
+                read()
+
+            multiple entries from readstream
+                until it is availabe
+
+    Multiple Http2Streams are reading from a single Http2Session.
+
+        ┌─────────────────┐
+        │Http2Stream::read│─ ─ ─
+        └─────────────────┘     │        session.read_lock
+        ┌─────────────────┐      ─ ─ ▶    ╔════╗      ┌─────────────┐
+        │Http2Stream::read│───────────────╣Lock╠─────▶│Session::read│
+        └─────────────────┘      ─ ─ ▶    ╚════╝      └─────────────┘
+        ┌─────────────────┐     │
+        │Http2Stream::read│─ ─ ─
+        └─────────────────┘
 
 """
 
@@ -230,7 +256,6 @@ const DEFAULT_SERVER_SETTINGS =
     Vector{SettingsEntry}(
         [
             SettingsEntry(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100),
-            SettingsEntry(NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65536),
         ])
 
 const DEFAULT_CLIENT_SETTINGS =
@@ -238,7 +263,6 @@ const DEFAULT_CLIENT_SETTINGS =
         [
             SettingsEntry(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100),
             SettingsEntry(NGHTTP2_SETTINGS_ENABLE_PUSH, 1),
-            SettingsEntry(NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65536),
         ])
 
 """
@@ -433,8 +457,10 @@ function Base.bytesavailable(http2_stream::Http2Stream)
     end
 end
 
-function read_to_buffer(http2_stream::Http2Stream, nb::Integer)
+function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
     should_read = true
+
+    a = bytesavailable(http2_stream.buffer)
 
     # Process HTTP2 stack until there is no more available data in HTTP2 stream.
     while should_read
@@ -452,6 +478,12 @@ function read_to_buffer(http2_stream::Http2Stream, nb::Integer)
         break
     end
 
+    if !http2_stream.eof && a != bytesavailable(http2_stream.buffer)
+        size::Csize_t = bytesavailable(http2_stream.buffer)
+        println("server: session_consume: $(size)")
+        session_consume(http2_stream.session, http2_stream.stream_id, size)
+    end
+
     # TODO throw error from the stream or session
 end
 
@@ -459,7 +491,7 @@ end
     Reads available data from the HTTP2 stream.
 """
 function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
-    read_to_buffer(http2_stream, 1)
+    ensure_in_buffer(http2_stream, 1)
 
     lock(http2_stream.lock) do
         result_buffer = read(http2_stream.buffer)
@@ -471,7 +503,7 @@ end
     Reads at most nb bytes from from the HTTP2 stream.
 """
 function Base.read(http2_stream::Http2Stream, nb::Integer)::Vector{UInt8}
-    read_to_buffer(http2_stream, nb)
+    ensure_in_buffer(http2_stream, nb)
 
     lock(http2_stream.lock) do
         if bytesavailable(http2_stream.buffer) < nb
@@ -488,7 +520,7 @@ function Base.read(http2_stream::Http2Stream, ::Type{UInt8})::UInt8
 end
 
 function Base.unsafe_read(http2_stream::Http2Stream, p::Ptr{UInt8}, nb::UInt)
-    read_to_buffer(http2_stream, nb)
+    ensure_in_buffer(http2_stream, nb)
 
     lock(http2_stream.lock) do
         if bytesavailable(http2_stream.buffer) < nb
@@ -635,6 +667,12 @@ function nghttp2_session_callbacks_new()
         callbacks,
         NGHTTP2_CALLBACKS.x.on_stream_close_callback_ptr);
 
+    ccall((:nghttp2_session_callbacks_set_data_source_read_length_callback, libnghttp2),
+        Cvoid,
+        (Nghttp2SessionCallbacks, Ptr{Cvoid},),
+        callbacks,
+        NGHTTP2_CALLBACKS.x.on_set_data_source_read_length_callback_ptr);
+
     finalizer(nghttp2_session_callbacks_del, callbacks)
     return callbacks
 end
@@ -752,7 +790,10 @@ function nghttp2_session_recv(nghttp2_session::Nghttp2Session)
     return result
 end
 
-function nghttp2_submit_window_update(nghttp2_session::Nghttp2Session, stream_id::Int32, window_size_increment::Int32)
+function nghttp2_submit_window_update(
+    nghttp2_session::Nghttp2Session,
+    stream_id::Int32,
+    window_size_increment::Int32)
     result = ccall((:nghttp2_submit_window_update, libnghttp2),
         Cint,
         (Nghttp2Session, UInt8, Cint, Cint),
@@ -760,6 +801,20 @@ function nghttp2_submit_window_update(nghttp2_session::Nghttp2Session, stream_id
         NGHTTP2_FLAG_NONE,
         stream_id,
         window_size_increment)
+
+    return result
+end
+
+function nghttp2_session_consume(
+    nghttp2_session::Nghttp2Session,
+    stream_id::Int32,
+    size::Csize_t)
+    result = ccall((:nghttp2_session_consume, libnghttp2),
+        Cint,
+        (Nghttp2Session, Int32, Csize_t),
+        nghttp2_session,
+        stream_id,
+        size)
 
     return result
 end
@@ -818,8 +873,9 @@ function on_frame_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2F
     frame_header = unsafe_load(Ptr{Nghttp2FrameHeader}(frame.ptr))
 
     stream_id = frame_header.stream_id
-    last_frame = stream_id !=0 && frame_header.flags & UInt8(NGHTTP2_FLAG_END_STREAM) != 0
+    last_frame = stream_id != 0 && frame_header.flags & UInt8(NGHTTP2_FLAG_END_STREAM) != 0
 
+    println("received a frame: stream_id: $(stream_id) $(last_frame) flags: $(frame_header.flags)")
     if last_frame
         # Last frame in the stream detected, mark the stream as EOF.
         local http2_stream::Http2Stream
@@ -983,6 +1039,8 @@ function on_data_source_read_callback(
         send_data_flags |= NGHTTP2_DATA_FLAG_EOF
     end
 
+    println("on_data_source_read_callback: $(in_length) $(buf_length) eof:$(source_stream_eof) $(send_data_flags) bytesavailable:$(bytesavailable(data_source.send_stream))")
+
     if source_has_trailer
         send_data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM
 
@@ -1002,11 +1060,30 @@ function on_data_source_read_callback(
     return result
 end
 
-function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid}):Cint
+function on_stream_close_callback(
+    nghttp2_session::Nghttp2Session,
+    stream_id::Cint, 
+    error_code::UInt32, 
+    user_data::Ptr{Cvoid}):Cint
     # Get the server session object.
     session = session_from_data(user_data)
 
     result::Cint = 0
+    return result
+end
+
+function on_set_data_source_read_length_callback(
+    nghttp2_session::Nghttp2Session,
+    frame_type::UInt8,
+    stream_id::Cint,
+    session_remote_window_size::Cint,
+    stream_remote_window_size::Cint,
+    remote_max_frame_size::UInt32,
+    user_data::Ptr{Cvoid}):Cssize_t
+    # Get the server session object.
+    session = session_from_data(user_data)
+    println("||=>on_set_data_source_read_length_callback")
+    result::Cssize_t = 256*1024*1024
     return result
 end
 
@@ -1023,6 +1100,7 @@ struct Nghttp2Callbacks
     on_error_callback_ptr::Ptr{Nothing}
     on_data_source_read_callback_ptr::Ptr{Nothing}
     on_stream_close_callback_ptr::Ptr{Nothing}
+    on_set_data_source_read_length_callback_ptr::Ptr{Nothing}
 
     function Nghttp2Callbacks()
         on_recv_callback_ptr = @cfunction on_recv_callback Cssize_t (Nghttp2Session, Ptr{UInt8}, Csize_t, Cint, Ptr{Cvoid})
@@ -1034,6 +1112,7 @@ struct Nghttp2Callbacks
         on_error_callback_ptr = @cfunction on_error_callback Cint (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{Cvoid})
         on_data_source_read_callback_ptr = @cfunction on_data_source_read_callback Cssize_t (Nghttp2Session, Cint, Ptr{UInt8}, Csize_t, Ptr{UInt32}, Ptr{Ptr{IOBuffer}}, Ptr{Cvoid})
         on_stream_close_callback_ptr = @cfunction on_stream_close_callback Cint (Nghttp2Session, Cint, UInt32, Ptr{Cvoid})
+        on_set_data_source_read_length_callback_ptr = @cfunction on_set_data_source_read_length_callback Cssize_t (Nghttp2Session, UInt8, Cint, Cint, Cint, UInt32, Ptr{Cvoid})
 
         return new(
             on_recv_callback_ptr,
@@ -1044,7 +1123,8 @@ struct Nghttp2Callbacks
             on_send_callback_ptr,
             on_error_callback_ptr,
             on_data_source_read_callback_ptr,
-            on_stream_close_callback_ptr)
+            on_stream_close_callback_ptr,
+            on_set_data_source_read_length_callback_ptr)
     end
 end
 
@@ -1064,6 +1144,20 @@ function submit_window_update(session::Session, stream_id::Int32, window_size_in
     GC.@preserve session begin
         session_set_data(session)
         result = nghttp2_submit_window_update(session.nghttp2_session, stream_id, window_size_increment)
+        @show result
+        result = nghttp2_session_send(session.nghttp2_session)
+        @show result
+        return result
+    end
+end
+
+function session_consume(session::Session, stream_id::Int32, size::Csize_t)
+    GC.@preserve session begin
+        session_set_data(session)
+        #result = nghttp2_session_consume(session.nghttp2_session, stream_id, size)
+        #@show result
+        result = nghttp2_session_send(session.nghttp2_session)
+        @show result
         return result
     end
 end
@@ -1185,10 +1279,6 @@ function send(
     header::StringPairs = StringPairs(),
     trailer::StringPairs = StringPairs())
 
-    println("send nghttp2_submit_response stream_id: $(stream_id)")
-    @show header
-    @show trailer
-
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
 
@@ -1234,6 +1324,8 @@ function send(
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
 
+    println("=> sending")
+
     GC.@preserve session send_buffer headers trailers begin
         session_set_data(session)
 
@@ -1258,11 +1350,43 @@ function send(
                     throw("error")
                 end
 
+                #nghttp2_submit_window_update(session.nghttp2_session, stream_id, Int32(64*1024))
+
                 result = nghttp2_session_send(session.nghttp2_session)
+
+                if !eof(send_buffer)
+                    println("###=> there is more to send")
+
+                    available_bytes = bytesavailable(session.io)
+                    eof(session.io)
+
+                    println(" ==> sender waiting for more: available_bytes: $(available_bytes)")
+
+                    #input_data = read(session.io, available_bytes)
+
+                    #GC.@preserve session begin
+                    #session_set_data(session)
+
+                    #nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+
+
+                    #nghttp2_submit_window_update(session.nghttp2_session, stream_id, Int32(64*1024))
+
+                    result = nghttp2_session_send(session.nghttp2_session)
+#                    result = ccall((:nghttp2_submit_data, libnghttp2),
+#                        Cint,
+#                        (Nghttp2Session, UInt8, Cint, Ptr{Cvoid}),
+#                        session.nghttp2_session,
+#                        0,
+#                        stream_id,
+#                        pointer_from_objref(data_provider))
+#                    @show result
+                end
             end
         end
     end
 
+    println("<=> send done")
     # Release headers and trailers after sending the frame.
     finalize(headers)
     finalize(trailers)
