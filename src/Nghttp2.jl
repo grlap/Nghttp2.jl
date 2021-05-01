@@ -460,8 +460,6 @@ end
 function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
     should_read = true
 
-    a = bytesavailable(http2_stream.buffer)
-
     # Process HTTP2 stack until there is no more available data in HTTP2 stream.
     while should_read
         lock(http2_stream.lock) do
@@ -478,12 +476,6 @@ function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
         break
     end
 
-    ##if !http2_stream.eof && a != bytesavailable(http2_stream.buffer)
-    #    size::Csize_t = bytesavailable(http2_stream.buffer) - a
-    #    println("server: session_consume: $(size)")
-    #    session_consume(http2_stream.session, http2_stream.stream_id, size)
-    #end
-
     # TODO throw error from the stream or session
 end
 
@@ -495,11 +487,6 @@ function Base.read(http2_stream::Http2Stream)::Vector{UInt8}
 
     lock(http2_stream.lock) do
         result_buffer = read(http2_stream.buffer)
-
-        if length(result_buffer) != 0
-            session_consume(http2_stream.session, http2_stream.stream_id, Csize_t(length(result_buffer)))
-        end
-
         return result_buffer
     end
 end
@@ -984,8 +971,14 @@ function on_send_callback(nghttp2_session::Nghttp2Session, data::Ptr{UInt8}, len
 
     GC.@preserve out_buffer unsafe_copyto!(pointer(out_buffer), data, length)
 
-    #TODO try/catch, send failure
-    write(session.io, out_buffer)
+    try
+        write(session.io, out_buffer)
+    catch ex
+        lock(session.lock) do
+            session.exception = ex
+        end
+        return Int(NGHTTP2_ERR_CALLBACK_FAILURE) % Csize_t
+    end
 
     return length
 end
@@ -1136,15 +1129,6 @@ function submit_settings(session::Session, settings::Vector{SettingsEntry})
     end
 end
 
-#TODO remove and use send
-function session_consume(session::Session, stream_id::Int32, size::Csize_t)
-    GC.@preserve session begin
-        session_set_data(session)
-        result = nghttp2_session_send(session.nghttp2_session)
-        return result
-    end
-end
-
 """
     Returns true, if session is in error state.
 """
@@ -1156,19 +1140,17 @@ end
 
 """
     Reads from the session input IO and sends it to HTTP2 stack.
+    Returns true if there is more data available.
+    Ensure only one task is reading from the session.
 """
 function internal_read!(session::Session)::Bool
-    # TODO one thread must read from session IO
-    # HTTP2 streams are written to buffer::IOBuffer or PipeBuffer
-    # reader waits, receiver knows when the stream is closed
-    # TCP might be opened
-    #
-    # we could have one or more threads reading from the single session
-
-    #TODO assert if there is a lock session.lock
+    # Return if there are errors.
+    if has_errors(session)
+        return false
+    end
 
     lock(session.read_lock) do
-        if !has_errors(session) && !eof(session.io)
+        if !eof(session.io)
             available_bytes = bytesavailable(session.io)
             input_data = read(session.io, available_bytes)
 
@@ -1176,6 +1158,9 @@ function internal_read!(session::Session)::Bool
                 session_set_data(session)
 
                 nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+
+                # TODO that is the fix
+                nghttp2_session_send(session.nghttp2_session)
             end
 
             return true
@@ -1194,7 +1179,7 @@ function Sockets.recv(session::Session)::Option{Http2Stream}
     while is_reading
         lock(session.lock) do
             # Throw exception if errors occurred.
-            if (has_errors(session))
+            if !isnothing(session.exception)
                 throw(session.exception)
             end
 
@@ -1236,7 +1221,7 @@ end
 function try_recv(session::Session)::Option{Http2Stream}
     lock(session.lock) do
         # Throw exception if errors occurred.
-        if (has_errors(session))
+        if !isnothing(session.exception)
             throw(session.exception)
         end
 
@@ -1288,18 +1273,10 @@ function send(
                 @show result
 
                 result = nghttp2_session_send(session.nghttp2_session)
-                @show result
-
-                result = nghttp2_session_send(session.nghttp2_session)
 
                 #TODO improve it
                 while !eof(send_buffer)
-                    eof(session.io)
-                    available_bytes = bytesavailable(session.io)
-                    input_data = read(session.io, available_bytes)
-                    nghttp2_session_mem_recv(session.nghttp2_session, input_data)
-
-                    result = nghttp2_session_send(session.nghttp2_session)
+                    internal_read!(session)
                 end
             end
         end
@@ -1346,13 +1323,7 @@ function send(
                 result = nghttp2_session_send(session.nghttp2_session)
 
                 while !eof(send_buffer)
-                    #TODO improve it
-                    eof(session.io)
-                    available_bytes = bytesavailable(session.io)
-                    input_data = read(session.io, available_bytes)
-                    nghttp2_session_mem_recv(session.nghttp2_session, input_data)
-
-                    result = nghttp2_session_send(session.nghttp2_session)
+                    internal_read!(session)
                 end
             end
         end
