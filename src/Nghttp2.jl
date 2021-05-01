@@ -61,7 +61,8 @@ Nghttp2:
 module Nghttp2
 
 export Http2ClientSession, Http2ServerSession, Http2Stream, Http2ProtocolException
-export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof, bytesavailable
+export send, recv, try_recv, submit_request, submit_response, read, eof, bytesavailable, close
+export nghttp2_version
 
 using nghttp2_jll
 using BitFlags
@@ -419,8 +420,7 @@ mutable struct Http2ProtocolException <: Exception
     Http2ProtocolException(lib_error_code::Nghttp2Error, msg::String) = new(lib_error_code, msg)
 
     function Http2ProtocolException(lib_error_code::Nghttp2Error)
-        str_error = ccall(
-            (:nghttp2_strerror, libnghttp2),
+        str_error = ccall((:nghttp2_strerror, libnghttp2),
             Cstring,
             (Nghttp2Error,),
             lib_error_code)
@@ -488,7 +488,10 @@ function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
         break
     end
 
-    # TODO throw error from the stream or session
+    # Throw exception is session is in error state.
+    if has_error(http2_stream.session)
+        throw(http2_stream.session.exception)
+    end
 end
 
 """
@@ -599,9 +602,12 @@ end
 """
 function nghttp2_option_new()::Nghttp2Option
     nghttp2_option = Nghttp2Option(C_NULL)
-    result = ccall((:nghttp2_option_new, libnghttp2), Cint, (Ref{Nghttp2Option},), nghttp2_option)
-    if (result != 0)
-        throw("error")
+    result = ccall((:nghttp2_option_new, libnghttp2),
+        Cint,
+        (Ref{Nghttp2Option},),
+        nghttp2_option)
+    if result != 0
+        throw(Http2ProtocolException(Nghttp2Error(result)))
     end
 
     finalizer(nghttp2_option_del, nghttp2_option)
@@ -609,7 +615,10 @@ function nghttp2_option_new()::Nghttp2Option
 end
 
 function nghttp2_option_del(nghttp2_option::Nghttp2Option)
-    ccall((:nghttp2_option_del, libnghttp2), Cvoid, (Nghttp2Option,), nghttp2_option)
+    ccall((:nghttp2_option_del, libnghttp2),
+        Cvoid,
+        (Nghttp2Option,),
+        nghttp2_option)
     nghttp2_option.ptr = C_NULL
 end
 
@@ -626,9 +635,12 @@ end
 """
 function nghttp2_session_callbacks_new()
     callbacks = Nghttp2SessionCallbacks(C_NULL)
-    result = ccall((:nghttp2_session_callbacks_new, libnghttp2), Cint, (Ref{Nghttp2SessionCallbacks},), callbacks)
+    result = ccall((:nghttp2_session_callbacks_new, libnghttp2),
+        Cint,
+        (Ref{Nghttp2SessionCallbacks},),
+        callbacks)
     if (result != 0)
-        throw("error")
+        throw(Http2ProtocolException(Nghttp2Error(result)))
     end
 
     ccall((:nghttp2_session_callbacks_set_on_frame_recv_callback, libnghttp2),
@@ -690,7 +702,9 @@ function nghttp2_session_callbacks_new()
 end
 
 function nghttp2_session_callbacks_del(nghttp2_callbacks::Nghttp2SessionCallbacks)
-    ccall((:nghttp2_session_callbacks_del, libnghttp2), Cvoid, (Nghttp2SessionCallbacks,), nghttp2_callbacks)
+    ccall((:nghttp2_session_callbacks_del, libnghttp2),
+        Cvoid,
+        (Nghttp2SessionCallbacks,), nghttp2_callbacks)
     nghttp2_callbacks.ptr = C_NULL
 end
 
@@ -704,13 +718,15 @@ function server_session_new(io::IO)::Session
 
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
-    result = ccall(
-        (:nghttp2_session_server_new, libnghttp2),
+    result = ccall((:nghttp2_session_server_new, libnghttp2),
         Cint,
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}),
         nghttp2_session,
         nghttp2_session_callbacks,
         C_NULL)
+    if (result != 0)
+        throw(Http2ProtocolException(Nghttp2Error(result)))
+    end
 
     session = Session(io, nghttp2_session)
 
@@ -729,13 +745,15 @@ function client_session_new(io::IO)::Session
 
     nghttp2_session_callbacks = nghttp2_session_callbacks_new()
 
-    result = ccall(
-        (:nghttp2_session_client_new, libnghttp2),
+    result = ccall((:nghttp2_session_client_new, libnghttp2),
         Cint,
         (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid},),
         nghttp2_session,
         nghttp2_session_callbacks,
         C_NULL)
+    if (result != 0)
+        throw(Http2ProtocolException(Nghttp2Error(result)))
+    end
 
     session = Session(io, nghttp2_session)
 
@@ -744,12 +762,8 @@ function client_session_new(io::IO)::Session
     return session
 end
 
-function http2_session_del(session::Session)
-    nghttp2_session_del(session.nghttp2_session)
-end
-
 """
-    Session.
+    Nghttp2Session.
 """
 function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
     result = ccall((:nghttp2_session_check_server_session, libnghttp2),
@@ -761,14 +775,38 @@ function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
 end
 
 function nghttp2_session_del(nghttp2_session::Nghttp2Session)
-    result = ccall((:nghttp2_session_del, libnghttp2), Cvoid, (Nghttp2Session,), session)
+    result = ccall((:nghttp2_session_del, libnghttp2),
+        Cvoid,
+        (Nghttp2Session,),
+        nghttp2_session)
     nghttp2_session.ptr = C_NULL
 
     return result
 end
 
+function nghttp2_session_terminate_session(nghttp2_session::Nghttp2Session)
+    result = ccall((:nghttp2_session_terminate_session, libnghttp2),
+        Cvoid,
+        (Nghttp2Session,),
+        nghttp2_session)
+
+    return result
+end
+
+function nghttp2_submit_shutdown_notice(nghttp2_session::Nghttp2Session)
+    result = ccall((:nghttp2_submit_shutdown_notice, libnghttp2),
+        Cint,
+        (Nghttp2Session,),
+        nghttp2_session)
+
+    return result
+end
+
 function nghttp2_session_send(nghttp2_session::Nghttp2Session)
-    result = ccall((:nghttp2_session_send, libnghttp2), Cint, (Nghttp2Session,), nghttp2_session)
+    result = ccall((:nghttp2_session_send, libnghttp2),
+        Cint,
+        (Nghttp2Session,),
+        nghttp2_session)
 
     return result
 end
@@ -797,7 +835,10 @@ function nghttp2_session_mem_recv(nghttp2_session::Nghttp2Session, input_data::V
 end
 
 function nghttp2_session_recv(nghttp2_session::Nghttp2Session)
-    result = ccall((:nghttp2_session_recv, libnghttp2), Cint, (Nghttp2Session,), nghttp2_session)
+    result = ccall((:nghttp2_session_recv, libnghttp2),
+        Cint,
+        (Nghttp2Session,),
+        nghttp2_session)
 
     return result
 end
@@ -1034,7 +1075,6 @@ function on_data_source_read_callback(
     GC.@preserve in_buffer unsafe_copyto!(buf, pointer(in_buffer), in_length)
 
     source_stream_eof = eof(data_source.send_stream)
-    # TODO verify if this is correct do not send trailer if there is more data to send
     source_has_trailer = source_stream_eof && length(data_source.trailer) != 0
 
     send_data_flags::Nghttp2DataFlags = NGHTTP2_DATA_FLAG_NONE
@@ -1135,18 +1175,33 @@ end
 function submit_settings(session::Session, settings::Vector{SettingsEntry})
     GC.@preserve session begin
         session_set_data(session)
+
         result = nghttp2_session_submit_settings(session.nghttp2_session, settings)
+        if result != 0
+            throw(Http2ProtocolException(Nghttp2Error(result)))
+        end
+
         result = nghttp2_session_send(session.nghttp2_session)
-        return result
+        if result != 0
+            throw(Http2ProtocolException(Nghttp2Error(result)))
+        end
     end
 end
 
 """
     Returns true, if session is in error state.
 """
-function has_errors(session::Session)
+function has_error(session::Session)
     lock(session.lock) do
         return !isnothing(session.exception)
+    end
+end
+
+function set_error(session::Session, http2_protocol_exception::Http2ProtocolException)
+    lock(session.lock) do
+        if !isnothing(session.exception)
+            session.exception = http2_protocol_exception
+        end
     end
 end
 
@@ -1157,22 +1212,27 @@ end
 """
 function internal_read!(session::Session)::Bool
     # Return if there are errors.
-    if has_errors(session)
+    if has_error(session)
         return false
     end
 
     lock(session.read_lock) do
-        if !eof(session.io)
+        if bytesavailable(session.io) != 0 || !eof(session.io)
             available_bytes = bytesavailable(session.io)
             input_data = read(session.io, available_bytes)
 
             GC.@preserve session begin
                 session_set_data(session)
 
-                nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+                result = nghttp2_session_mem_recv(session.nghttp2_session, input_data)
+                if result < 0
+                    set_error(session, Http2ProtocolException(Nghttp2Error(result)))
+                end
 
-                # TODO that is the fix
-                nghttp2_session_send(session.nghttp2_session)
+                result = nghttp2_session_send(session.nghttp2_session)
+                if result < 0
+                    set_error(session, Http2ProtocolException(Nghttp2Error(result)))
+                end
             end
 
             return true
@@ -1282,12 +1342,16 @@ function send(
                     pointer(headers),
                     length(headers),
                     pointer_from_objref(data_provider))
-                @show result
+                if result < 0
+                    set_error(session, Http2ProtocolException(Nghttp2Error(result)))
+                end
 
                 result = nghttp2_session_send(session.nghttp2_session)
+                if result < 0
+                    set_error(session, Http2ProtocolException(Nghttp2Error(result)))
+                end
 
-                #TODO improve it
-                while !eof(send_buffer) && !has_errors(session)
+                while !eof(send_buffer) && !has_error(session)
                     internal_read!(session)
                 end
             end
@@ -1299,7 +1363,7 @@ function send(
     finalize(trailers)
 
     # Throw exception if errors occurred.
-    if has_errors(session)
+    if has_error(session)
         throw(session.exception)
     end
 end
@@ -1338,8 +1402,11 @@ function send(
                 end
 
                 result = nghttp2_session_send(session.nghttp2_session)
+                if result < 0
+                    set_error(session, Http2ProtocolException(Nghttp2Error(result)))
+                end
 
-                while !eof(send_buffer) && !has_errors(session)
+                while !eof(send_buffer) && !has_error(session)
                     internal_read!(session)
                 end
             end
@@ -1351,7 +1418,7 @@ function send(
     finalize(trailers)
 
     # Throw exception if errors occurred.
-    if has_errors(session)
+    if has_error(session)
         throw(session.exception)
     end
 
@@ -1409,6 +1476,24 @@ function Sockets.recv(http2_server_session::Http2ServerSession)
     return recv(http2_server_session.session)
 end
 
+function Base.close(http2_server_session::Http2ServerSession)
+    println("Close http2_server_session")
+    result = nghttp2_submit_shutdown_notice(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolException(Nghttp2Error(result)))
+    end
+
+    result = nghttp2_session_send(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolException(Nghttp2Error(result)))
+    end
+
+    close(http2_server_session.session.io)
+end
+
+"""
+    Http2 stream.
+"""
 function submit_response(
     http2_stream::Http2Stream,
     io::IO,
