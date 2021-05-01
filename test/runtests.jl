@@ -199,3 +199,29 @@ end
     @test fetch(f2) == true
     fetch(f1)
 end
+
+@testset "Submit request on server session" begin
+    # Create an server session and send a request.
+    tcp_connection = connect("www.nghttp2.org", 80)
+
+    server_session = Nghttp2.from_accepted(tcp_connection)
+
+    try
+        Nghttp2.send(
+            server_session.session,
+            IOBuffer(),
+            [
+                ":method" => "GET",
+                ":path" => "/",
+                ":scheme" => "http",
+                ":authority" => "www.nghttp2.org",
+                "accept" => "*/*",
+                "user-agent" => "curl/7.75.0"
+            ])
+        @test 1 == 0
+    catch e
+        @test typeof(e) == Http2ProtocolException
+        @test e.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
+        @test e.msg == "Protocol error"
+    end
+end

@@ -60,7 +60,7 @@ Nghttp2:
 
 module Nghttp2
 
-export Http2ClientSession, Http2ServerSession, Http2Stream
+export Http2ClientSession, Http2ServerSession, Http2Stream, Http2ProtocolException
 export send, recv, try_recv, submit_request, submit_response, nghttp2_version, read, eof, bytesavailable
 
 using nghttp2_jll
@@ -415,6 +415,18 @@ end
 mutable struct Http2ProtocolException <: Exception
     lib_error_code::Nghttp2Error
     msg::String
+
+    Http2ProtocolException(lib_error_code::Nghttp2Error, msg::String) = new(lib_error_code, msg)
+
+    function Http2ProtocolException(lib_error_code::Nghttp2Error)
+        str_error = ccall(
+            (:nghttp2_strerror, libnghttp2),
+            Cstring,
+            (Nghttp2Error,),
+            lib_error_code)
+
+        return new(lib_error_code, unsafe_string(str_error))
+    end
 end
 
 abstract type AbstractSession end
@@ -1321,8 +1333,8 @@ function send(
                     pointer(headers),
                     length(headers),
                     pointer_from_objref(data_provider))
-                if (stream_id < 0)
-                    throw("error")
+                if stream_id < 0
+                    throw(Http2ProtocolException(Nghttp2Error(stream_id)))
                 end
 
                 result = nghttp2_session_send(session.nghttp2_session)
