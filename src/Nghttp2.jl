@@ -1275,7 +1275,7 @@ function send(
                 result = nghttp2_session_send(session.nghttp2_session)
 
                 #TODO improve it
-                while !eof(send_buffer)
+                while !eof(send_buffer) && !has_errors(session)
                     internal_read!(session)
                 end
             end
@@ -1285,6 +1285,11 @@ function send(
     # Release headers and trailers after sending the frame.
     finalize(headers)
     finalize(trailers)
+
+    # Throw exception if errors occurred.
+    if has_errors(session)
+        throw(session.exception)
+    end
 end
 
 function send(
@@ -1322,17 +1327,22 @@ function send(
 
                 result = nghttp2_session_send(session.nghttp2_session)
 
-                while !eof(send_buffer)
+                while !eof(send_buffer) && !has_errors(session)
                     internal_read!(session)
                 end
             end
         end
     end
 
-    println("<=> send done")
     # Release headers and trailers after sending the frame.
     finalize(headers)
     finalize(trailers)
+
+    # Throw exception if errors occurred.
+    if has_errors(session)
+        throw(session.exception)
+    end
+
     return stream_id
 end
 
