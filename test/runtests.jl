@@ -93,7 +93,6 @@ end
             ":scheme" => "https",
             ":authority" => "www.nghttp2.org",
             "accept" => "*/*",
-            "user-agent" => "curl/7.75.0"
         ])
 
     @show stream_id1
@@ -109,7 +108,7 @@ end
 
     header_lengths = (length(stream1.headers), length(stream2.headers))
     @test minimum(header_lengths) == 16
-    @test maximum(header_lengths) == 20
+    @test maximum(header_lengths) == 19
 
 end
 

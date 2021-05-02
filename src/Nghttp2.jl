@@ -7,7 +7,6 @@
 [x] add basic unit test, server, client
 [x] unit test to submit_response with payload > 16 KB
 [ ] verify trailers are sent at the end with request is send with multiple packages
-[ ] figure out when to create a stream on header receive
 [ ] add unit test with invalid response
 [x] return an error if failure occurs in Http2Stream
 [ ] nghttp2_on_stream_close_callback, close stream on error
@@ -102,7 +101,7 @@ const Option{T} = Union{Nothing, T} where {T}
 """
     The frame types in HTTP/2 specification.
 """
-@enum(Nghttp2FrameType,
+@enum(Nghttp2FrameType::UInt8,
      # The DATA frame.
      NGHTTP2_DATA = 0,
      # The HEADERS frame.
@@ -333,7 +332,7 @@ struct Nghttp2FrameHeader
     # The stream identifier (aka, stream ID)
     stream_id::Int32
     # The type of this frame.  See `nghttp2_frame_type`.
-    type::UInt8
+    type::Nghttp2FrameType
     # The flags.
     flags::UInt8
     # Reserved bit in frame header.  Currently, this is always set to 0
@@ -921,35 +920,11 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
 
     frame_header = unsafe_load(Ptr{Nghttp2FrameHeader}(frame.ptr))
 
-    add_new_stream = false
-
-    if (frame_header.type == UInt8(NGHTTP2_HEADERS))
-        headers_frame = unsafe_load(Ptr{Nghttp2HeadersFrame}(frame.ptr))
-
-        is_server::Bool = is_nghttp2_server_session(nghttp2_session)
-
-        #TODO verify the logic to detect a new steam is correct
-        #|| headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE
-        #TODO rewrite this
-        #TODO bug here we count incoming outgoing streams
-        if ((is_server && headers_frame.cat == NGHTTP2_HCAT_REQUEST) ||
-            (!is_server && (headers_frame.cat == NGHTTP2_HCAT_PUSH_RESPONSE || headers_frame.cat == Nghttp2.NGHTTP2_HCAT_RESPONSE)))
-            add_new_stream = true
-        end
-    end
-
-    if (frame_header.type == UInt8(NGHTTP2_PUSH_PROMISE))
-        add_new_stream = true
-    end
-
-    # TODO workaround, how to detect when to add a new frame ??
-    if (add_new_stream)
-        # Create a new stream.
-        lock(session.lock) do
-            if !haskey(session.recv_streams, frame_header.stream_id)
-                session.recv_streams[frame_header.stream_id] = Http2Stream(session, frame_header.stream_id)
-                enqueue!(session.recv_streams_id, frame_header.stream_id)
-            end
+    # Create a new stream.
+    lock(session.lock) do
+        if !haskey(session.recv_streams, frame_header.stream_id)
+            session.recv_streams[frame_header.stream_id] = Http2Stream(session, frame_header.stream_id)
+            enqueue!(session.recv_streams_id, frame_header.stream_id)
         end
     end
 
