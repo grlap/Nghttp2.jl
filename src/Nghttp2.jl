@@ -1404,17 +1404,23 @@ function open(io::IO)::Http2ClientSession
     return Http2ClientSession(session)
 end
 
+"""
+    Submit a request.
+"""
 function submit_request(
     http2_client_session::Http2ClientSession,
     io::IO,
     header::StringPairs = StringPairs(),
-    trailer::StringPairs = StringPairs())
+    trailer::StringPairs = StringPairs())::Option{Http2Stream}
 
-    return send(
+    response_stream_id = send(
         http2_client_session.session,
         io,
         header,
         trailer)
+
+    response_stream = recv(http2_client_session.session)
+    return response_stream
 end
 
 """

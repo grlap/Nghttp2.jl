@@ -42,7 +42,7 @@ end
 
     # TODO empty request
     io = IOBuffer()
-    stream_id1 = submit_request(
+    stream1 = submit_request(
         client_session,
         io,
         [
@@ -53,7 +53,6 @@ end
             "accept" => "*/*",
         ])
 
-    stream1 = recv(client_session.session)
     stream2 = recv(client_session.session)
     stream3 = try_recv(client_session.session)
 
@@ -69,7 +68,6 @@ end
 end
 
 @testset "Https2 Connection" begin
-    println("===[Https]===")
     tcp_stream = connect("nghttp2.org", 443)
 
     ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
@@ -85,7 +83,7 @@ end
     client_session = Nghttp2.open(ssl_stream)
 
     iob = IOBuffer()
-    stream_id1 = submit_request(
+    stream1 = submit_request(
         client_session, iob,
         [
             ":method" => "GET",
@@ -95,12 +93,7 @@ end
             "accept" => "*/*",
         ])
 
-    @show stream_id1
-
-    stream1 = recv(client_session.session)
     stream2 = recv(client_session.session)
-
-    println("[#TODO] => Wait too long")
 
     lengths = (length(read_all(stream1)), length(read_all_by_byte(stream2)))
     @test minimum(lengths) == 6616

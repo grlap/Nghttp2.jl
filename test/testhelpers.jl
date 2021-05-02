@@ -91,8 +91,7 @@ function test_client(
 
     client_session = Nghttp2.open(tcp_connection)
 
-    stream_1 = submit_request(client_session, request_iob, headers)
-    stream1 = recv(client_session.session)
+    stream1 = submit_request(client_session, request_iob, headers)
     response_data = read_all(stream1)
 
     @test length(response_data) == length(request_data)
