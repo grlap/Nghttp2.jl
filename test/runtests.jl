@@ -13,6 +13,21 @@ include("testhelpers.jl")
 
 """
 
+macro catch_exception_object(code)
+    quote
+        err = try
+            $(esc(code))
+            nothing
+        catch e
+            e
+        end
+        if err == nothing
+            error("Expected exception, got $err.")
+        end
+        err
+    end
+end
+
 # Verifies calling into Nghttp library.
 @testset "Nghttp2 " begin
     info = nghttp2_version()
@@ -36,7 +51,6 @@ end
             ":scheme" => "http",
             ":authority" => "www.nghttp2.org",
             "accept" => "*/*",
-            "user-agent" => "curl/7.75.0"
         ])
 
     stream1 = recv(client_session.session)
@@ -51,7 +65,7 @@ end
 
     header_lengths = (length(stream1.headers), length(stream2.headers))
     @test minimum(header_lengths) == 15
-    @test maximum(header_lengths) == 19
+    @test maximum(header_lengths) == 18
 end
 
 @testset "Https2 Connection" begin
@@ -137,6 +151,10 @@ end
     f1 = @async test_server()
     f2 = @async test_client(IOBuffer(), INVALID_REQUEST_HEADERS)
 
-    fetch(f1)
-    @test fetch(f2) == true
+    err = @catch_exception_object fetch(f2)
+    @test err.task.exception isa Base.IOError
+
+    err = @catch_exception_object fetch(f1)
+    @test err.task.exception isa Http2ProtocolException
+    @test err.task.exception.lib_error_code == Nghttp2.NGHTTP2_ERR_HTTP_HEADER
 end

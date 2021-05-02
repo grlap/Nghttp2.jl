@@ -50,7 +50,14 @@ function test_server(socket::Sockets.TCPServer)
 
     server_session = Nghttp2.from_accepted(accepted_socket)
 
-    request_stream::Http2Stream = recv(server_session)
+    local request_stream::Http2Stream
+
+    try
+        request_stream = recv(server_session)
+    catch ex
+        close(server_session)
+        throw(ex)
+    end
 
     println("==> test_server recv a stream")
     request_data = read_all(request_stream)
