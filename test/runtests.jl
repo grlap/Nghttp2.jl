@@ -6,7 +6,10 @@ using Test
 include("testhelpers.jl")
 
 """
-    recv
+    Items:
+[ ] send invalid headers
+[ ] add faulty IO stream
+[ ] add multiple requests
 
 """
 
@@ -128,4 +131,12 @@ end
         @test e.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
         @test e.msg == "Protocol error"
     end
+end
+
+@testset "Invaid request" begin
+    f1 = @async test_server()
+    f2 = @async test_client(IOBuffer(), INVALID_REQUEST_HEADERS)
+
+    fetch(f1)
+    @test fetch(f2) == true
 end

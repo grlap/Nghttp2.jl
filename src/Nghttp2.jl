@@ -3,37 +3,19 @@
 """
 
 """
-    using Pkg
-    Pkg.add("nghttp2_jll")
-    Pkg.add("BitFlags")
-    Pkg.add("DataStructures")
-
-    # OpenSSL support
-    Pkg.add("OpenSSL_jll")
-    Pkg.add("MozillaCACerts_jll")
-
-    include("Proto/ExperimentManagerService_pb.jl")
-    include("nghttp2.jl")
-
     Items:
-Nghttp2:
 [x] add basic unit test, server, client
-[ ] unit test to submit_response with payload > 16 KB
-[ ] verify trailers are send at the end with request is send with multiple packages
-[ ] figure out when to create a receive stream on receving a header 
-[ ] submit_response should return a stream
+[x] unit test to submit_response with payload > 16 KB
+[ ] verify trailers are sent at the end with request is send with multiple packages
+[ ] figure out when to create a stream on header receive
 [ ] add unit test with invalid response
-[ ] Http2Stream return an error
+[x] return an error if failure occurs in Http2Stream
 [ ] nghttp2_on_stream_close_callback, close stream on error
-[ ] nghttp2_on_data_chunk_recv_callback
-    you should use nghttp2_on_frame_recv_callback to know all data frames are received
-[ ] #TODO here is a bug, NGHTTP2_DATA_FLAG_NO_END_STREAM only if trailer
-    does not send NGHTTP2_DATA_FLAG_NO_END_STREAM flag when sending request without trailer
+[ ] ensure sessions are destroyed
+[ ] submit request should return correct stream
+[ ] create a new request stream
 
-[ ] Limit nghttp2_session_callbacks_set_data_source_read_length_callback
-    max 64kb is allowed
-    or try to nghttp2_submit_data
-
+    - nghttp2_xxx functions returns error code, except _new functions.
 
         session reading loop
             read and dispatch
@@ -41,8 +23,8 @@ Nghttp2:
             single Http2Session
                 read()
 
-            multiple entries from readstream
-                until it is availabe
+            multiple entries from read stream
+                until it is available
 
     Multiple Http2Streams are reading from a single Http2Session.
 
@@ -452,7 +434,7 @@ mutable struct Http2Stream <: IO
 end
 
 """
- Test whether an HTTP2 stream is at end-of-file.
+    Tests whether an HTTP2 stream is at end-of-file.
 """
 function Base.eof(http2_stream::Http2Stream)::Bool
     lock(http2_stream.lock) do
@@ -461,7 +443,7 @@ function Base.eof(http2_stream::Http2Stream)::Bool
 end
 
 """
-    Return the number of bytes available for reading before a read from this stream will block.
+    Returns number of bytes available for reading before a read from this stream will block.
 """
 function Base.bytesavailable(http2_stream::Http2Stream)
     lock(http2_stream.lock) do
@@ -469,6 +451,9 @@ function Base.bytesavailable(http2_stream::Http2Stream)
     end
 end
 
+"""
+    Ensures there are requested number of bytes in the Http2Stream.
+"""
 function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
     should_read = true
 
@@ -775,20 +760,19 @@ function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
 end
 
 function nghttp2_session_del(nghttp2_session::Nghttp2Session)
-    result = ccall((:nghttp2_session_del, libnghttp2),
+    ccall((:nghttp2_session_del, libnghttp2),
         Cvoid,
         (Nghttp2Session,),
         nghttp2_session)
     nghttp2_session.ptr = C_NULL
-
-    return result
 end
 
-function nghttp2_session_terminate_session(nghttp2_session::Nghttp2Session)
+function nghttp2_session_terminate_session(nghttp2_session::Nghttp2Session, error_code::UInt32)
     result = ccall((:nghttp2_session_terminate_session, libnghttp2),
-        Cvoid,
-        (Nghttp2Session,),
-        nghttp2_session)
+        Cint,
+        (Nghttp2Session, UInt32),
+        nghttp2_session,
+        error_code)
 
     return result
 end
