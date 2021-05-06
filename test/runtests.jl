@@ -119,24 +119,20 @@ end
 
     server_session = Nghttp2.from_accepted(tcp_connection)
 
-    try
-        Nghttp2.send(
-            server_session.session,
-            IOBuffer(),
-            [
-                ":method" => "GET",
-                ":path" => "/",
-                ":scheme" => "http",
-                ":authority" => "www.nghttp2.org",
-                "accept" => "*/*",
-                "user-agent" => "curl/7.75.0"
-            ])
-        @test 1 == 0
-    catch e
-        @test typeof(e) == Http2ProtocolException
-        @test e.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
-        @test e.msg == "Protocol error"
-    end
+    err = @catch_exception_object Nghttp2.send(
+        server_session.session,
+        IOBuffer(),
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "http",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+            "user-agent" => "curl/7.75.0"
+        ])
+    @test typeof(err) == Http2ProtocolException
+    @test err.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
+    @test err.msg == "Protocol error"
 end
 
 @testset "Invaid request" begin

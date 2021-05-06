@@ -1202,7 +1202,7 @@ function internal_read!(session::Session)::Bool
 end
 
 """
-    Receive from the session.
+    Receives next Http2Stream from the session.
 """
 function Sockets.recv(session::Session)::Option{Http2Stream}
     is_reading = true
@@ -1419,6 +1419,7 @@ function submit_request(
         header,
         trailer)
 
+    #TODO ensure response_stream is response_stream_id
     response_stream = recv(http2_client_session.session)
     return response_stream
 end
