@@ -74,8 +74,7 @@ end
     result = OpenSSL.set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION | OpenSSL.SSL_OP_NO_TLSv1_2)
     result = OpenSSL.set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
 
-    bio_stream = OpenSSL.BIOStream(tcp_stream)
-    ssl_stream = SSLStream(ssl_ctx, bio_stream, bio_stream)
+    ssl_stream = SSLStream(ssl_ctx, tcp_stream, tcp_stream)
 
     # TODO expose connect
     result = connect(ssl_stream)
@@ -102,7 +101,7 @@ end
     header_lengths = (length(stream1.headers), length(stream2.headers))
     @test minimum(header_lengths) == 16
     @test maximum(header_lengths) == 19
-
+    close(ssl_stream)
 end
 
 @testset "Large request" begin
