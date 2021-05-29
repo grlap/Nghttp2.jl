@@ -31,31 +31,21 @@ end
 const DEFAULT_STATUS_200 = [":status" => "200"]
 const DEFAULT_TRAILER = ["grpc-status" => "0"]
 
-const DEFAULT_REQUEST_HEADERS = [
-    ":method" => "POST",
-    ":path" => "/default",
-    ":authority" => "localhost:5000",
-    ":scheme" => "http",
-    "content-type" => "application/text"]
+const DEFAULT_REQUEST_HEADERS = [":method" => "POST", ":path" => "/default", ":authority" => "localhost:5000", ":scheme" => "http", "content-type" => "application/text"]
 
-const INVALID_REQUEST_HEADERS = [
-    ":method" => "POST",
-    ":path" => "/default",
-    ":scheme" => "http",
-    "content-type" => "application/text",
-    ":authority" => "localhost:5000"]
+const INVALID_REQUEST_HEADERS = [":method" => "POST", ":path" => "/default", ":scheme" => "http", "content-type" => "application/text", ":authority" => "localhost:5000"]
 
 function test_server(socket::Sockets.TCPServer)
     accepted_socket = accept(socket)
 
-    server_session = Nghttp2.from_accepted(accepted_socket)
+    session_socket = Nghttp2.from_accepted(accepted_socket)
 
     local request_stream::Http2Stream
 
     try
-        request_stream = recv(server_session)
+        request_stream = recv(session_socket)
     catch ex
-        close(server_session)
+        close(session_socket)
         throw(ex)
     end
 
@@ -65,24 +55,19 @@ function test_server(socket::Sockets.TCPServer)
 
     send_buffer = IOBuffer(request_data)
 
-    submit_response(
-        request_stream,
-        send_buffer,
-        DEFAULT_STATUS_200)
+    submit_response(request_stream, send_buffer, DEFAULT_STATUS_200)
 
-    close(server_session)
+    close(session_socket)
 
-    close(socket)
+    return close(socket)
 end
 
 function test_server()
     socket = listen(5000)
-    test_server(socket)
+    return test_server(socket)
 end
 
-function test_client(
-    request_io::IO = IOBuffer(),
-    headers = DEFAULT_REQUEST_HEADERS)
+function test_client(request_io::IO=IOBuffer(), headers=DEFAULT_REQUEST_HEADERS)
     tcp_connection = connect(5000)
 
     # Read all the input data to the buffer, use it later for comparision.

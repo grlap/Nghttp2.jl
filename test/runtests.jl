@@ -42,16 +42,7 @@ end
 
     # TODO empty request
     io = IOBuffer()
-    stream1 = submit_request(
-        client_session,
-        io,
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "http",
-            ":authority" => "www.nghttp2.org",
-            "accept" => "*/*",
-        ])
+    stream1 = submit_request(client_session, io, [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
 
     stream2 = recv(client_session.session)
     stream3 = try_recv(client_session.session)
@@ -82,15 +73,7 @@ end
     client_session = Nghttp2.open(ssl_stream)
 
     iob = IOBuffer()
-    stream1 = submit_request(
-        client_session, iob,
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "https",
-            ":authority" => "www.nghttp2.org",
-            "accept" => "*/*",
-        ])
+    stream1 = submit_request(client_session, iob, [":method" => "GET", ":path" => "/", ":scheme" => "https", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
 
     stream2 = recv(client_session.session)
 
@@ -106,7 +89,7 @@ end
 
 @testset "Large request" begin
     f1 = @async test_server()
-    f2 = @async test_client(IOBuffer(repeat('a', 9*65536)))
+    f2 = @async test_client(IOBuffer(repeat('a', 9 * 65536)))
 
     fetch(f1)
     @test fetch(f2) == true
@@ -118,17 +101,9 @@ end
 
     server_session = Nghttp2.from_accepted(tcp_connection)
 
-    err = @catch_exception_object Nghttp2.send(
-        server_session.session,
-        IOBuffer(),
-        [
-            ":method" => "GET",
-            ":path" => "/",
-            ":scheme" => "http",
-            ":authority" => "www.nghttp2.org",
-            "accept" => "*/*",
-            "user-agent" => "curl/7.75.0"
-        ])
+    err = @catch_exception_object Nghttp2.send(server_session.session, IOBuffer(),
+                                               [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*",
+                                                "user-agent" => "curl/7.75.0"])
     @test typeof(err) == Http2ProtocolException
     @test err.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
     @test err.msg == "Protocol error"
