@@ -47,7 +47,6 @@ export nghttp2_version
 
 using nghttp2_jll
 using BitFlags
-using DataStructures
 using Sockets
 
 const Option{T} = Union{Nothing,T} where {T}
@@ -548,7 +547,6 @@ end
     Writes the data to the Http2 stream.
 """
 function Base.write(http2_stream::Http2Stream, out_buffer::Vector{UInt8})
-    # TODO handle errors
     lock(http2_stream.lock) do
         # Write the data to the steam.
         return write(http2_stream.buffer, out_buffer)
@@ -562,17 +560,15 @@ mutable struct Session <: AbstractSession
     io::IO
     nghttp2_session::Nghttp2Session
     recv_streams::Dict{Int32,Http2Stream}
-    recv_streams_id::Queue{Int32}
+    recv_streams_id::Set{Int32}
     exception::Option{Exception}
     lock::ReentrantLock
     read_lock::ReentrantLock
 
     function Session(io::IO, nghttp2_session::Nghttp2Session)
-        return new(io, nghttp2_session, Dict{Int32,Http2Stream}(), Queue{Int32}(), nothing, ReentrantLock(), ReentrantLock())
+        return new(io, nghttp2_session, Dict{Int32,Http2Stream}(), Set{Int32}(), nothing, ReentrantLock(), ReentrantLock())
     end
 end
-
-const SessionIdCounter = Threads.Atomic{Int64}(1)
 
 """
     Retrieves the Session object from the nghttp2_session data.
@@ -821,7 +817,7 @@ function on_begin_headers_callback(nghttp2_session::Nghttp2Session, frame::Nghtt
     lock(session.lock) do
         if !haskey(session.recv_streams, frame_header.stream_id)
             session.recv_streams[frame_header.stream_id] = Http2Stream(session, frame_header.stream_id)
-            enqueue!(session.recv_streams_id, frame_header.stream_id)
+            push!(session.recv_streams_id, frame_header.stream_id)
         end
     end
 
@@ -1029,7 +1025,7 @@ function internal_read!(session::Session)::Bool
     end
 
     lock(session.read_lock) do
-        if bytesavailable(session.io) != 0 || !eof(session.io)
+        if bytesavailable(session.io) != 0 || !isreadable(session.io) || !eof(session.io)
             available_bytes = bytesavailable(session.io)
             input_data = read(session.io, available_bytes)
 
@@ -1058,9 +1054,9 @@ end
     Receives next Http2Stream from the session.
 """
 function Sockets.recv(session::Session)::Option{Http2Stream}
-    is_reading = true
+    should_read = true
 
-    while is_reading
+    while should_read
         lock(session.lock) do
             # Throw exception if errors occurred.
             if !isnothing(session.exception)
@@ -1070,11 +1066,11 @@ function Sockets.recv(session::Session)::Option{Http2Stream}
             # Break, if there is no data available in the session's IO and
             # there are no more HTTP2 streams to return.
             if !isempty(session.recv_streams_id) || eof(session.io)
-                is_reading = false
+                should_read = false
             end
         end
 
-        if is_reading
+        if should_read
             # Process received data through the HTTP2 stack.
             internal_read!(session)
             continue
@@ -1086,15 +1082,60 @@ function Sockets.recv(session::Session)::Option{Http2Stream}
     lock(session.lock) do
         # If available, return a new HTTP2 stream.
         if !isempty(session.recv_streams_id)
-            recv_stream_id = dequeue!(session.recv_streams_id)
+            recv_stream_id = pop!(session.recv_streams_id)
             recv_stream = session.recv_streams[recv_stream_id]
 
             return recv_stream
         end
 
-        if eof(session.io)
-            return nothing
+        eof(session.io)
+
+        return nothing
+    end
+end
+
+"""
+    Receives expected Http2Stream from the session.
+"""
+function Sockets.recv(session::Session, stream_id::Int32)::Option{Http2Stream}
+    should_read = true
+
+    while should_read
+        lock(session.lock) do
+            # Throw exception if errors occurred.
+            if !isnothing(session.exception)
+                throw(session.exception)
+            end
+
+            # Break, if there is no data available in the session's IO and there are no more HTTP2 streams to return.
+            if stream_id in session.recv_streams_id || !isreadable(session.io) || eof(session.io)
+                should_read = false
+            end
         end
+
+        if should_read
+            # Process received data through the HTTP2 stack.
+            internal_read!(session)
+            continue
+        end
+
+        break
+    end
+
+    lock(session.lock) do
+        # If available, return a new HTTP2 stream.
+        if stream_id in session.recv_streams_id
+            delete!(session.recv_streams_id, stream_id)
+            recv_stream = session.recv_streams[stream_id]
+
+            return recv_stream
+        end
+
+        if isempty(session.recv_streams_id)
+            eof(session.io)
+        end
+
+        return nothing
     end
 end
 
@@ -1111,7 +1152,7 @@ function try_recv(session::Session)::Option{Http2Stream}
 
         # If available, return Http2Stream.
         if !isempty(session.recv_streams_id)
-            recv_stream_id = dequeue!(session.recv_streams_id)
+            recv_stream_id = pop!(session.recv_streams_id)
             recv_stream = session.recv_streams[recv_stream_id]
 
             return recv_stream
@@ -1244,8 +1285,8 @@ end
 function submit_request(http2_client_session::Http2ClientSession, io::IO, header::StringPairs, trailer::StringPairs)::Option{Http2Stream}
     response_stream_id = send(http2_client_session.session, io, header, trailer)
 
-    #TODO ensure response_stream is response_stream_id
-    response_stream = recv(http2_client_session.session)
+    response_stream = recv(http2_client_session.session, response_stream_id)
+
     return response_stream
 end
 
