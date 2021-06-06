@@ -46,9 +46,9 @@ jobs:
             ${{ runner.os }}-test-${{ env.cache-name }}-
             ${{ runner.os }}-test-
             ${{ runner.os }}-
+      - name: Private Registry
+        run: julia -e 'using Pkg; pkg"registry add https://github.com/grlap/Registry"'
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Pkg.add("OpenSSL")
-        run: julia -e 'using Pkg; Pkg.add(url="http://github.com/grlap/OpenSSL.jl")'
       - name: Pkg.status()
         run: julia -e 'using Pkg; Pkg.Registry.status()'
       - uses: julia-actions/julia-runtest@v1
