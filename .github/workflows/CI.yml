@@ -49,10 +49,8 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - name: Pkg.add("OpenSSL")
         run: julia -e 'using Pkg; Pkg.add(url="http://github.com/grlap/OpenSSL.jl")'
-      - name: Pkg.update()
-        run: julia -e 'using Pkg; Pkg.update()'
       - name: Pkg.status()
-        run: julia -e 'using Pkg; Pkg.status()'
+        run: julia -e 'using Pkg; Pkg.Registry.status()'
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v1
