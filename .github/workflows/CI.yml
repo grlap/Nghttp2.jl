@@ -48,6 +48,8 @@ jobs:
             ${{ runner.os }}-
       - name: Pkg.add("OpenSSL")
         run: julia -e 'using Pkg; Pkg.add(url="http://github.com/grlap/OpenSSL.jl")'
+      - name: Pkg.status()
+        run: julia -e 'using Pkg; Pkg.status()'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
