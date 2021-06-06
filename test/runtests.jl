@@ -1,5 +1,5 @@
 using Sockets
-#using OpenSSL
+using OpenSSL
 using Nghttp2
 using Test
 
@@ -58,7 +58,6 @@ end
     @test maximum(header_lengths) == 18
 end
 
-"""
 @testset "Https2 Connection" begin
     tcp_stream = connect("nghttp2.org", 443)
 
@@ -87,7 +86,6 @@ end
     @test maximum(header_lengths) == 19
     close(ssl_stream)
 end
-"""
 
 @testset "Large request" begin
     f1 = @async test_server()
