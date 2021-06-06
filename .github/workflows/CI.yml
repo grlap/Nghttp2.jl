@@ -47,7 +47,7 @@ jobs:
             ${{ runner.os }}-test-
             ${{ runner.os }}-
       - name: Private Registry
-        run: julia -e 'using Pkg; pkg"registry add https://github.com/grlap/Registry"'
+        run: julia -i ./config_registry.jl
       - uses: julia-actions/julia-buildpkg@v1
       - name: Pkg.status()
         run: julia -e 'using Pkg; Pkg.Registry.status()'
