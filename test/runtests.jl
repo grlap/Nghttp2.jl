@@ -101,10 +101,9 @@ end
 
     server_session = Nghttp2.from_accepted(tcp_connection)
 
-    err = @catch_exception_object Nghttp2.send(server_session.session, IOBuffer(),
-                                               [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*",
-                                                "user-agent" => "curl/7.75.0"])
-    @test typeof(err) == Http2ProtocolException
+    headers = [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*", "user-agent" => "curl/7.75.0"]
+    err = @catch_exception_object Nghttp2.send(server_session.session, IOBuffer(), headers)
+    @test typeof(err) == Http2ProtocolError
     @test err.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO
     @test err.msg == "Protocol error"
 end
@@ -117,6 +116,6 @@ end
     @test err.task.exception isa Base.IOError
 
     err = @catch_exception_object fetch(f1)
-    @test err.task.exception isa Http2ProtocolException
+    @test err.task.exception isa Http2ProtocolError
     @test err.task.exception.lib_error_code == Nghttp2.NGHTTP2_ERR_HTTP_HEADER
 end
