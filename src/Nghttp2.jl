@@ -1316,15 +1316,18 @@ function Sockets.recv(http2_server_session::Http2ServerSession)
 end
 
 function Base.close(http2_server_session::Http2ServerSession)
+    println("close http2_server_session")
     result = nghttp2_submit_shutdown_notice(http2_server_session.session.nghttp2_session)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
+    println("close http2_server_session $(result)")
 
     result = nghttp2_session_send(http2_server_session.session.nghttp2_session)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
+    println("close http2_server_session $(result)")
 
     return close(http2_server_session.session.io)
 end
