@@ -614,12 +614,13 @@ end
 mutable struct Nghttp2SessionCallbacks
     ptr::Ptr{Cvoid}
 
-    function Nghttp2SessionCallbacks()
+    function Nghttp2SessionCallbacks()::Nghttp2SessionCallbacks
         callbacks = new(C_NULL)
         result = ccall((:nghttp2_session_callbacks_new, libnghttp2), Cint, (Ref{Nghttp2SessionCallbacks},), callbacks)
         if (result != 0)
             throw(Http2ProtocolError(Nghttp2Error(result)))
         end
+        finalizer(free, callbacks)
 
         ccall((:nghttp2_session_callbacks_set_on_frame_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
               NGHTTP2_CALLBACKS.x.on_frame_recv_callback_ptr)
@@ -642,7 +643,6 @@ mutable struct Nghttp2SessionCallbacks
         ccall((:nghttp2_session_callbacks_set_on_stream_close_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
               NGHTTP2_CALLBACKS.x.on_stream_close_callback_ptr)
 
-        finalizer(free, callbacks)
         return callbacks
     end
 end
