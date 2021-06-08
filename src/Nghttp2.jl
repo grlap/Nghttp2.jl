@@ -212,6 +212,39 @@ const Option{T} = Union{Nothing,T} where {T}
 const NGHTTP2_FLAG_ACK = NGHTTP2_FLAG_END_STREAM
 
 """
+    The status codes for the RST_STREAM and GOAWAY frames.
+"""
+@enum(Nghttp2ErrorCode::UInt32,
+      # No errors.
+      NGHTTP2_NO_ERROR = 0x0,
+      # PROTOCOL_ERROR.
+      NGHTTP2_PROTOCOL_ERROR = 0x1,
+      # INTERNAL_ERROR.
+      NGHTTP2_INTERNAL_ERROR = 0x2,
+      # FLOW_CONTROL_ERROR.
+      NGHTTP2_FLOW_CONTROL_ERROR = 0x3,
+      # SETTINGS_TIMEOUT.
+      NGHTTP2_SETTINGS_TIMEOUT = 0x4,
+      # STREAM_CLOSED.
+      NGHTTP2_STREAM_CLOSED = 0x5,
+      # FRAME_SIZE_ERROR.
+      NGHTTP2_FRAME_SIZE_ERROR = 0x6,
+      # REFUSED_STREAM.
+      NGHTTP2_REFUSED_STREAM = 0x7,
+      # CANCEL.
+      NGHTTP2_CANCEL = 0x8,
+      # COMPRESSION_ERROR.
+      NGHTTP2_COMPRESSION_ERROR = 0x9,
+      #CONNECT_ERROR.
+      NGHTTP2_CONNECT_ERROR = 0xa,
+      # ENHANCE_YOUR_CALM.
+      NGHTTP2_ENHANCE_YOUR_CALM = 0xb,
+      # INADEQUATE_SECURITY.
+      NGHTTP2_INADEQUATE_SECURITY = 0xc,
+      # HTTP_1_1_REQUIRED.
+      NGHTTP2_HTTP_1_1_REQUIRED = 0xd)
+
+"""
     The flags for header field name/value pair.
 """
 @enum(Nghttp2NvFlags::UInt8,
@@ -733,6 +766,11 @@ function nghttp2_session_submit_settings(nghttp2_session::Nghttp2Session, settin
                  length(settings))
 end
 
+function nghttp2_submit_goaway(nghttp2_session::Nghttp2Session)
+    return ccall((:nghttp2_submit_goaway, libnghttp2), Cint, (Nghttp2Session, UInt8, Cint, UInt32, Ptr{Cvoid}, Csize_t), nghttp2_session, NGHTTP2_FLAG_NONE, 0, NGHTTP2_NO_ERROR,
+                 C_NULL, 0)
+end
+
 function nghttp2_session_mem_recv(nghttp2_session::Nghttp2Session, input_data::Vector{UInt8})
     return ccall((:nghttp2_session_mem_recv, libnghttp2), Cssize_t, (Nghttp2Session, Ptr{UInt8}, Csize_t), nghttp2_session, input_data, length(input_data))
 end
@@ -1031,7 +1069,7 @@ function internal_read!(session::Session)::Bool
     end
 
     lock(session.read_lock) do
-        if bytesavailable(session.io) != 0 || !isreadable(session.io) || !eof(session.io)
+        if bytesavailable(session.io) != 0 || (isreadable(session.io) && !eof(session.io))
             available_bytes = bytesavailable(session.io)
             input_data = read(session.io, available_bytes)
 
@@ -1316,6 +1354,16 @@ end
 
 function Base.close(http2_server_session::Http2ServerSession)
     result = nghttp2_submit_shutdown_notice(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolError(Nghttp2Error(result)))
+    end
+
+    result = nghttp2_session_send(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolError(Nghttp2Error(result)))
+    end
+
+    result = nghttp2_submit_goaway(http2_server_session.session.nghttp2_session)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
