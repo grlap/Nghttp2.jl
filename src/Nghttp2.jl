@@ -1030,6 +1030,7 @@ function internal_read!(session::Session)::Bool
         return false
     end
 
+    @show bytesavailable(session.io), isreadable(session.io), eof(session.io)
     lock(session.read_lock) do
         if bytesavailable(session.io) != 0 || !isreadable(session.io) || !eof(session.io)
             available_bytes = bytesavailable(session.io)
