@@ -339,13 +339,30 @@ free(nv_pairs::NVPairs) =
 """
 mutable struct Nghttp2Option
     ptr::Ptr{Cvoid}
+
+    """
+        Creates an instance of Nghttp2Options.
+    """
+    function Nghttp2Option()::Nghttp2Option
+        nghttp2_option = new(C_NULL)
+        result = ccall((:nghttp2_option_new, libnghttp2), Cint, (Ref{Nghttp2Option},), nghttp2_option)
+        if result != 0
+            throw(Http2ProtocolError(Nghttp2Error(result)))
+        end
+
+        finalizer(free, nghttp2_option)
+        return nghttp2_option
+    end
+end
+
+function free(nghttp2_option::Nghttp2Option)
+    ccall((:nghttp2_option_del, libnghttp2), Cvoid, (Nghttp2Option,), nghttp2_option)
+
+    nghttp2_option.ptr = C_NULL
+    return nothing
 end
 
 mutable struct Nghttp2Session
-    ptr::Ptr{Cvoid}
-end
-
-mutable struct Nghttp2SessionCallbacks
     ptr::Ptr{Cvoid}
 end
 
@@ -587,26 +604,6 @@ function session_set_data(session::Session)
     return ccall((:nghttp2_session_set_user_data, libnghttp2), Cvoid, (Nghttp2Session, Ptr{Cvoid}), session.nghttp2_session, pointer_from_objref(session))
 end
 
-"""
-    Creates an instance of Nghttp2Options.
-"""
-function nghttp2_option_new()::Nghttp2Option
-    nghttp2_option = Nghttp2Option(C_NULL)
-    result = ccall((:nghttp2_option_new, libnghttp2), Cint, (Ref{Nghttp2Option},), nghttp2_option)
-    if result != 0
-        throw(Http2ProtocolError(Nghttp2Error(result)))
-    end
-
-    finalizer(nghttp2_option_del, nghttp2_option)
-    return nghttp2_option
-end
-
-function nghttp2_option_del(nghttp2_option::Nghttp2Option)
-    ccall((:nghttp2_option_del, libnghttp2), Cvoid, (Nghttp2Option,), nghttp2_option)
-    nghttp2_option.ptr = C_NULL
-    return nothing
-end
-
 function nghttp2_option_set_no_auto_window_update(nghttp2_option::Nghttp2Option, value::Cint)
     return ccall((:nghttp2_option_set_no_auto_window_update, libnghttp2), Cvoid, (Nghttp2Option, Cint), nghttp2_option, value)
 end
@@ -614,39 +611,45 @@ end
 """
     Session callbacks.
 """
-function nghttp2_session_callbacks_new()
-    callbacks = Nghttp2SessionCallbacks(C_NULL)
-    result = ccall((:nghttp2_session_callbacks_new, libnghttp2), Cint, (Ref{Nghttp2SessionCallbacks},), callbacks)
-    if (result != 0)
-        throw(Http2ProtocolError(Nghttp2Error(result)))
+mutable struct Nghttp2SessionCallbacks
+    ptr::Ptr{Cvoid}
+
+    function Nghttp2SessionCallbacks()
+        callbacks = new(C_NULL)
+        result = ccall((:nghttp2_session_callbacks_new, libnghttp2), Cint, (Ref{Nghttp2SessionCallbacks},), callbacks)
+        if (result != 0)
+            throw(Http2ProtocolError(Nghttp2Error(result)))
+        end
+
+        ccall((:nghttp2_session_callbacks_set_on_frame_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
+              NGHTTP2_CALLBACKS.x.on_frame_recv_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_recv_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_on_begin_headers_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
+              NGHTTP2_CALLBACKS.x.on_begin_headers_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_on_header_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
+              NGHTTP2_CALLBACKS.x.on_header_recv_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_on_data_chunk_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
+              NGHTTP2_CALLBACKS.x.on_data_chunk_recv_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_send_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_send_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_error_callback2, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_error_callback_ptr)
+
+        ccall((:nghttp2_session_callbacks_set_on_stream_close_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
+              NGHTTP2_CALLBACKS.x.on_stream_close_callback_ptr)
+
+        finalizer(free, callbacks)
+        return callbacks
     end
-
-    ccall((:nghttp2_session_callbacks_set_on_frame_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
-          NGHTTP2_CALLBACKS.x.on_frame_recv_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_recv_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_on_begin_headers_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
-          NGHTTP2_CALLBACKS.x.on_begin_headers_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_on_header_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_header_recv_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_on_data_chunk_recv_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
-          NGHTTP2_CALLBACKS.x.on_data_chunk_recv_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_send_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_send_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_error_callback2, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks, NGHTTP2_CALLBACKS.x.on_error_callback_ptr)
-
-    ccall((:nghttp2_session_callbacks_set_on_stream_close_callback, libnghttp2), Cvoid, (Nghttp2SessionCallbacks, Ptr{Cvoid}), callbacks,
-          NGHTTP2_CALLBACKS.x.on_stream_close_callback_ptr)
-
-    finalizer(nghttp2_session_callbacks_del, callbacks)
-    return callbacks
 end
 
-function nghttp2_session_callbacks_del(nghttp2_callbacks::Nghttp2SessionCallbacks)
+function free(nghttp2_callbacks::Nghttp2SessionCallbacks)
     ccall((:nghttp2_session_callbacks_del, libnghttp2), Cvoid, (Nghttp2SessionCallbacks,), nghttp2_callbacks)
+
     nghttp2_callbacks.ptr = C_NULL
     return nothing
 end
@@ -659,16 +662,17 @@ end
 function server_session_new(io::IO)::Session
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
-    nghttp2_session_callbacks = nghttp2_session_callbacks_new()
+    nghttp2_session_callbacks = Nghttp2SessionCallbacks()
 
     result = ccall((:nghttp2_session_server_new, libnghttp2), Cint, (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}), nghttp2_session, nghttp2_session_callbacks, C_NULL)
     if (result != 0)
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
+    finalizer(free, nghttp2_session)
 
     session = Session(io, nghttp2_session)
 
-    nghttp2_session_callbacks_del(nghttp2_session_callbacks)
+    finalize(nghttp2_session_callbacks)
 
     return session
 end
@@ -681,16 +685,17 @@ end
 function client_session_new(io::IO)::Session
     nghttp2_session::Nghttp2Session = Nghttp2Session(C_NULL)
 
-    nghttp2_session_callbacks = nghttp2_session_callbacks_new()
+    nghttp2_session_callbacks = Nghttp2SessionCallbacks()
 
     result = ccall((:nghttp2_session_client_new, libnghttp2), Cint, (Ref{Nghttp2Session}, Nghttp2SessionCallbacks, Ptr{Cvoid}), nghttp2_session, nghttp2_session_callbacks, C_NULL)
     if (result != 0)
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
+    finalizer(free, nghttp2_session)
 
     session = Session(io, nghttp2_session)
 
-    nghttp2_session_callbacks_del(nghttp2_session_callbacks)
+    finalize(nghttp2_session_callbacks)
 
     return session
 end
@@ -704,8 +709,9 @@ function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
     return result != 0
 end
 
-function nghttp2_session_del(nghttp2_session::Nghttp2Session)
+function free(nghttp2_session::Nghttp2Session)
     ccall((:nghttp2_session_del, libnghttp2), Cvoid, (Nghttp2Session,), nghttp2_session)
+
     nghttp2_session.ptr = C_NULL
     return nothing
 end
@@ -1309,7 +1315,6 @@ function Sockets.recv(http2_server_session::Http2ServerSession)
 end
 
 function Base.close(http2_server_session::Http2ServerSession)
-    println("Close http2_server_session")
     result = nghttp2_submit_shutdown_notice(http2_server_session.session.nghttp2_session)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
