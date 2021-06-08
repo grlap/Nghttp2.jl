@@ -55,6 +55,7 @@ const Option{T} = Union{Nothing,T} where {T}
     Error codes used by Nghttp2 library.
 """
 @enum(Nghttp2Error::Int32,
+      NGHTTP2_NO_ERROR = 0,
       # Invalid argument passed.
       NGHTTP2_ERR_INVALID_ARGUMENT = -501,
       # Out of buffer space.
@@ -733,6 +734,11 @@ function nghttp2_session_submit_settings(nghttp2_session::Nghttp2Session, settin
                  length(settings))
 end
 
+function nghttp2_submit_goaway(nghttp2_session::Nghttp2Session)
+    return ccall((:nghttp2_submit_goaway, libnghttp2), Cint, (Nghttp2Session, UInt8, Cint, UInt32, Ptr{Cvoid}, Csize_t),
+        nghttp2_session, NGHTTP2_FLAG_NONE, 0, NGHTTP2_NO_ERROR, C_NULL, 0)
+end
+
 function nghttp2_session_mem_recv(nghttp2_session::Nghttp2Session, input_data::Vector{UInt8})
     return ccall((:nghttp2_session_mem_recv, libnghttp2), Cssize_t, (Nghttp2Session, Ptr{UInt8}, Csize_t), nghttp2_session, input_data, length(input_data))
 end
@@ -1327,7 +1333,18 @@ function Base.close(http2_server_session::Http2ServerSession)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
     end
-    println("close http2_server_session $(result)")
+
+    result = nghttp2_submit_goaway(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolError(Nghttp2Error(result)))
+    end
+
+    result = nghttp2_session_send(http2_server_session.session.nghttp2_session)
+    if result != 0
+        throw(Http2ProtocolError(Nghttp2Error(result)))
+    end
+
+    #println("close http2_server_session $(result)")
 
     return close(http2_server_session.session.io)
 end
