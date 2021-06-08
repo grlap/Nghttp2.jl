@@ -1068,7 +1068,6 @@ function internal_read!(session::Session)::Bool
         return false
     end
 
-    #@show bytesavailable(session.io), isreadable(session.io), eof(session.io)
     lock(session.read_lock) do
         if bytesavailable(session.io) != 0 || (isreadable(session.io) && !eof(session.io))
             available_bytes = bytesavailable(session.io)
@@ -1354,7 +1353,6 @@ function Sockets.recv(http2_server_session::Http2ServerSession)
 end
 
 function Base.close(http2_server_session::Http2ServerSession)
-    #println("close http2_server_session")
     result = nghttp2_submit_shutdown_notice(http2_server_session.session.nghttp2_session)
     if result != 0
         throw(Http2ProtocolError(Nghttp2Error(result)))
