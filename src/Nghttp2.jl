@@ -55,7 +55,6 @@ const Option{T} = Union{Nothing,T} where {T}
     Error codes used by Nghttp2 library.
 """
 @enum(Nghttp2Error::Int32,
-      NGHTTP2_NO_ERROR = 0,
       # Invalid argument passed.
       NGHTTP2_ERR_INVALID_ARGUMENT = -501,
       # Out of buffer space.
@@ -211,6 +210,39 @@ const Option{T} = Union{Nothing,T} where {T}
       NGHTTP2_FLAG_PRIORITY = 0x20)
 
 const NGHTTP2_FLAG_ACK = NGHTTP2_FLAG_END_STREAM
+
+"""
+    The status codes for the RST_STREAM and GOAWAY frames.
+"""
+@enum(Nghttp2ErrorCode::UInt32,
+      # No errors.
+      NGHTTP2_NO_ERROR = 0x0,
+      # PROTOCOL_ERROR
+      NGHTTP2_PROTOCOL_ERROR = 0x1,
+      # INTERNAL_ERROR
+      NGHTTP2_INTERNAL_ERROR = 0x2,
+      # FLOW_CONTROL_ERROR
+      NGHTTP2_FLOW_CONTROL_ERROR = 0x3,
+      # SETTINGS_TIMEOUT
+      NGHTTP2_SETTINGS_TIMEOUT = 0x4,
+      # STREAM_CLOSED
+      NGHTTP2_STREAM_CLOSED = 0x5,
+      # FRAME_SIZE_ERROR
+      NGHTTP2_FRAME_SIZE_ERROR = 0x6,
+      # REFUSED_STREAM
+      NGHTTP2_REFUSED_STREAM = 0x7,
+      # CANCEL
+      NGHTTP2_CANCEL = 0x8,
+      # COMPRESSION_ERROR
+      NGHTTP2_COMPRESSION_ERROR = 0x9,
+      #CONNECT_ERROR
+      NGHTTP2_CONNECT_ERROR = 0xa,
+      # ENHANCE_YOUR_CALM
+      NGHTTP2_ENHANCE_YOUR_CALM = 0xb,
+      # INADEQUATE_SECURITY
+      NGHTTP2_INADEQUATE_SECURITY = 0xc,
+      # HTTP_1_1_REQUIRED
+      NGHTTP2_HTTP_1_1_REQUIRED = 0xd)
 
 """
     The flags for header field name/value pair.
@@ -735,8 +767,8 @@ function nghttp2_session_submit_settings(nghttp2_session::Nghttp2Session, settin
 end
 
 function nghttp2_submit_goaway(nghttp2_session::Nghttp2Session)
-    return ccall((:nghttp2_submit_goaway, libnghttp2), Cint, (Nghttp2Session, UInt8, Cint, UInt32, Ptr{Cvoid}, Csize_t),
-        nghttp2_session, NGHTTP2_FLAG_NONE, 0, NGHTTP2_NO_ERROR, C_NULL, 0)
+    return ccall((:nghttp2_submit_goaway, libnghttp2), Cint, (Nghttp2Session, UInt8, Cint, UInt32, Ptr{Cvoid}, Csize_t), nghttp2_session, NGHTTP2_FLAG_NONE, 0, NGHTTP2_NO_ERROR,
+                 C_NULL, 0)
 end
 
 function nghttp2_session_mem_recv(nghttp2_session::Nghttp2Session, input_data::Vector{UInt8})
