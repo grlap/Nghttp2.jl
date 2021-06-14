@@ -42,7 +42,7 @@
 module Nghttp2
 
 export Http2ClientSession, Http2ServerSession, Http2Stream, Http2ProtocolError
-export send, recv, try_recv, submit_request, submit_response, read, eof, bytesavailable, close
+export send, recv, try_recv, submit_request, submit_response, read, eof, bytesavailable, close, isopen
 export nghttp2_version
 
 using nghttp2_jll
@@ -518,6 +518,13 @@ function Base.bytesavailable(http2_stream::Http2Stream)
     lock(http2_stream.lock) do
         return bytesavailable(http2_stream.buffer)
     end
+end
+
+"""
+    Determines whether the underlying session IO is not yet closed. Even if the stream is closed, it may still have data to read in its buffer; use eof to check for the ability to read data.
+"""
+function Base.isopen(http2_stream::Http2Stream)
+    return isopen(http2_stream.session.io)
 end
 
 """
