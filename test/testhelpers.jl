@@ -50,6 +50,8 @@ function test_server(socket::Sockets.TCPServer)
         throw(ex)
     end
 
+    @test isopen(request_stream) == true
+
     println("==> test_server recv a stream")
     request_data = read_all(request_stream)
     println("test_server, received length: $(length(request_data))")
