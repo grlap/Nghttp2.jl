@@ -989,8 +989,7 @@ function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id
     return result
 end
 
-function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})
-    :Cint
+function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})::Cint
     # Get the server session object.
     session = session_from_data(user_data)
 
@@ -1050,7 +1049,7 @@ end
 """
     Returns true, if session is in error state.
 """
-function has_error(session::Session)
+function has_error(session::Session)::Bool
     lock(session.lock) do
         return !isnothing(session.exception)
     end
