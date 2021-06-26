@@ -42,7 +42,7 @@
 module Nghttp2
 
 export Http2ClientSession, Http2ServerSession, Http2Stream, Http2ProtocolError
-export send, recv, try_recv, submit_request, submit_response, read, eof, bytesavailable, close
+export send, recv, try_recv, submit_request, submit_response, read, eof, bytesavailable, close, isopen
 export nghttp2_version
 
 using nghttp2_jll
@@ -521,6 +521,13 @@ function Base.bytesavailable(http2_stream::Http2Stream)
 end
 
 """
+    Determines whether the underlying session IO is not yet closed. Even if the stream is closed, it may still have data to read in its buffer; use eof to check for the ability to read data.
+"""
+function Base.isopen(http2_stream::Http2Stream)
+    return isopen(http2_stream.session.io)
+end
+
+"""
     Ensures there are requested number of bytes in the Http2Stream.
 """
 function ensure_in_buffer(http2_stream::Http2Stream, nb::Integer)
@@ -736,7 +743,7 @@ end
 """
     Nghttp2Session.
 """
-function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
+function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)::Bool
     result = ccall((:nghttp2_session_check_server_session, libnghttp2), Cint, (Nghttp2Session,), nghttp2_session)
 
     return result != 0
@@ -982,8 +989,7 @@ function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id
     return result
 end
 
-function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})
-    :Cint
+function on_stream_close_callback(nghttp2_session::Nghttp2Session, stream_id::Cint, error_code::UInt32, user_data::Ptr{Cvoid})::Cint
     # Get the server session object.
     session = session_from_data(user_data)
 
@@ -1043,7 +1049,7 @@ end
 """
     Returns true, if session is in error state.
 """
-function has_error(session::Session)
+function has_error(session::Session)::Bool
     lock(session.lock) do
         return !isnothing(session.exception)
     end
@@ -1293,6 +1299,10 @@ function send(session::Session, send_buffer::IOBuffer, header::StringPairs=Strin
     end
 
     return stream_id
+end
+
+function is_server_session(session::Session)::Bool
+    return is_nghttp2_server_session(session.nghttp2_session)
 end
 
 """
