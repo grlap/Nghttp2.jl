@@ -38,14 +38,15 @@ const INVALID_REQUEST_HEADERS = [":method" => "POST", ":path" => "/default", ":s
 function test_server(socket::Sockets.TCPServer)
     accepted_socket = accept(socket)
 
-    session_socket = Nghttp2.from_accepted(accepted_socket)
+    server_session = Nghttp2.from_accepted(accepted_socket)
+    @test Nghttp2.is_server_session(server_session.session)
 
     local request_stream::Http2Stream
 
     try
-        request_stream = recv(session_socket)
+        request_stream = recv(server_session)
     catch ex
-        close(session_socket)
+        close(server_session)
         throw(ex)
     end
 
@@ -57,7 +58,7 @@ function test_server(socket::Sockets.TCPServer)
 
     submit_response(request_stream, send_buffer, DEFAULT_STATUS_200)
 
-    close(session_socket)
+    close(server_session)
 
     return close(socket)
 end

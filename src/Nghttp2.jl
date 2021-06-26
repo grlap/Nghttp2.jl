@@ -743,7 +743,7 @@ end
 """
     Nghttp2Session.
 """
-function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)
+function is_nghttp2_server_session(nghttp2_session::Nghttp2Session)::Bool
     result = ccall((:nghttp2_session_check_server_session, libnghttp2), Cint, (Nghttp2Session,), nghttp2_session)
 
     return result != 0
@@ -1300,6 +1300,10 @@ function send(session::Session, send_buffer::IOBuffer, header::StringPairs=Strin
     end
 
     return stream_id
+end
+
+function is_server_session(session::Session)::Bool
+    return is_nghttp2_server_session(session.nghttp2_session)
 end
 
 """
