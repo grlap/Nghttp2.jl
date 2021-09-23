@@ -461,7 +461,7 @@ struct Nghttp2Info
 end
 
 mutable struct DataSource
-    send_stream::IOBuffer
+    send_stream::IO
     trailer::NVPairs
 end
 
@@ -962,6 +962,7 @@ function on_data_source_read_callback(nghttp2_session::Nghttp2Session, stream_id
     data_source = unsafe_load(data_source)
     data_source = unsafe_pointer_to_objref(data_source)
 
+    # TODO on_data_source_read_callback here
     in_buffer = read(data_source.send_stream, buf_length)
     in_length = length(in_buffer)
 
