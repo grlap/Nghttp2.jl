@@ -891,8 +891,15 @@ function on_header_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2
     GC.@preserve header_value unsafe_copyto!(pointer(header_value), value, valuelen)
 
     # Store the header in the session stream.
-    recv_stream = session.recv_streams[frame_header.stream_id]
-    recv_stream.headers[String(header_name)] = String(header_value)
+    local recv_stream::Http2Stream
+
+    lock(session.lock) do
+        return recv_stream = session.recv_streams[frame_header.stream_id]
+    end
+
+    lock(recv_stream.lock) do
+        recv_stream.headers[String(header_name)] = String(header_value)
+    end
 
     result::Cint = 0
     return result
