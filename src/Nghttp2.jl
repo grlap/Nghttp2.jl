@@ -898,7 +898,7 @@ function on_header_recv_callback(nghttp2_session::Nghttp2Session, frame::Nghttp2
     end
 
     lock(recv_stream.lock) do
-        recv_stream.headers[String(header_name)] = String(header_value)
+        return recv_stream.headers[String(header_name)] = String(header_value)
     end
 
     result::Cint = 0
