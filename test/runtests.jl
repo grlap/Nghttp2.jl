@@ -35,7 +35,7 @@ end
 end
 
 # Verifies creating unsecured Http2 connection
-@testset "Http2 Connection" begin
+@testset "Http2 connection" begin
     tcp_connection = connect("www.nghttp2.org", 80)
 
     client_session = Nghttp2.open(tcp_connection)
@@ -58,7 +58,19 @@ end
     @test maximum(header_lengths) == 18
 end
 
-@testset "Https2 Connection" begin
+@testset "Http2 greedy client connection" begin
+    tcp_connection = connect("www.nghttp2.org", 80)
+
+    client_session = Nghttp2.open(tcp_connection)
+
+    io = IOBuffer()
+    stream1 = submit_request(client_session, io, [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
+
+    err = @catch_exception_object read(stream1, 128 * 1024)
+    @test typeof(err) == EOFError
+end
+
+@testset "Https2 connection" begin
     tcp_stream = connect("nghttp2.org", 443)
 
     ssl_ctx = OpenSSL.SSLContext(OpenSSL.TLSv12ClientMethod())
