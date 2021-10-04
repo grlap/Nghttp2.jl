@@ -1265,7 +1265,7 @@ function send(session::Session, stream_id::Int32, send_buffer::IO, header::Strin
     end
 end
 
-function send(session::Session, send_buffer::IOBuffer, header::StringPairs=StringPairs(), trailer::StringPairs=StringPairs())
+function send(session::Session, send_buffer::IO, header::StringPairs=StringPairs(), trailer::StringPairs=StringPairs())
     headers::NVPairs = convert_to_nvpairs(header)
     trailers::NVPairs = convert_to_nvpairs(trailer)
 
