@@ -42,7 +42,16 @@ end
 
     # TODO empty request
     io = IOBuffer()
-    stream1 = submit_request(client_session, io, [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
+    stream1 = submit_request(
+        client_session,
+        io,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "http",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+        ])
 
     stream2 = recv(client_session.session)
     stream3 = try_recv(client_session.session)
@@ -64,7 +73,16 @@ end
     client_session = Nghttp2.open(tcp_connection)
 
     io = IOBuffer()
-    stream1 = submit_request(client_session, io, [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
+    stream1 = submit_request(
+        client_session,
+        io,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "http",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+        ])
 
     err = @catch_exception_object read(stream1, 128 * 1024)
     @test typeof(err) == EOFError
@@ -85,7 +103,16 @@ end
     client_session = Nghttp2.open(ssl_stream)
 
     iob = IOBuffer()
-    stream1 = submit_request(client_session, iob, [":method" => "GET", ":path" => "/", ":scheme" => "https", ":authority" => "www.nghttp2.org", "accept" => "*/*"])
+    stream1 = submit_request(
+        client_session,
+        iob,
+        [
+            ":method" => "GET",
+            ":path" => "/",
+            ":scheme" => "https",
+            ":authority" => "www.nghttp2.org",
+            "accept" => "*/*",
+        ])
 
     stream2 = recv(client_session.session)
 
@@ -113,7 +140,13 @@ end
 
     server_session = Nghttp2.from_accepted(tcp_connection)
 
-    headers = [":method" => "GET", ":path" => "/", ":scheme" => "http", ":authority" => "www.nghttp2.org", "accept" => "*/*", "user-agent" => "curl/7.75.0"]
+    headers = [
+        ":method" => "GET",
+        ":path" => "/",
+        ":scheme" => "http",
+        ":authority" => "www.nghttp2.org",
+        "accept" => "*/*",
+        "user-agent" => "curl/7.75.0"]
     err = @catch_exception_object Nghttp2.send(server_session.session, IOBuffer(), headers)
     @test typeof(err) == Http2ProtocolError
     @test err.lib_error_code == Nghttp2.NGHTTP2_ERR_PROTO

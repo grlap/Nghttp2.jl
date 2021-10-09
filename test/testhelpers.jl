@@ -31,9 +31,19 @@ end
 const DEFAULT_STATUS_200 = [":status" => "200"]
 const DEFAULT_TRAILER = ["grpc-status" => "0"]
 
-const DEFAULT_REQUEST_HEADERS = [":method" => "POST", ":path" => "/default", ":authority" => "localhost:5000", ":scheme" => "http", "content-type" => "application/text"]
+const DEFAULT_REQUEST_HEADERS = [
+    ":method" => "POST",
+    ":path" => "/default",
+    ":authority" => "localhost:5000",
+    ":scheme" => "http",
+    "content-type" => "application/text"]
 
-const INVALID_REQUEST_HEADERS = [":method" => "POST", ":path" => "/default", ":scheme" => "http", "content-type" => "application/text", ":authority" => "localhost:5000"]
+const INVALID_REQUEST_HEADERS = [
+    ":method" => "POST",
+    ":path" => "/default",
+    ":scheme" => "http",
+    "content-type" => "application/text",
+    ":authority" => "localhost:5000"]
 
 function test_server(socket::Sockets.TCPServer)
     accepted_socket = accept(socket)
