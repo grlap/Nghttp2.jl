@@ -59,7 +59,7 @@ end
     @test isnothing(stream3)
 
     lengths = (length(read_all(stream2)), length(read_all(stream1)))
-    @test minimum(lengths) == 6616
+    @test minimum(lengths) == 6324
     @test maximum(lengths) == 39082
 
     header_lengths = (length(stream1.headers), length(stream2.headers))
@@ -117,7 +117,7 @@ end
     stream2 = recv(client_session.session)
 
     lengths = (length(read_all(stream1)), length(read_all_by_byte(stream2)))
-    @test minimum(lengths) == 6616
+    @test minimum(lengths) == 6324
     @test maximum(lengths) == 39082
 
     header_lengths = (length(stream1.headers), length(stream2.headers))
