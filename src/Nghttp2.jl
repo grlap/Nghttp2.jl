@@ -1358,8 +1358,7 @@ function internal_read!(session::Session)::Bool
 
     lock(session.read_lock) do
         if bytesavailable(session.io) != 0 || (isreadable(session.io) && !eof(session.io))
-            available_bytes = bytesavailable(session.io)
-            input_data = read(session.io, available_bytes)
+            input_data = readavailable(session.io)
 
             GC.@preserve session begin
                 session_set_data(session)
