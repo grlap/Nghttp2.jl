@@ -95,7 +95,7 @@ end
     result = OpenSSL.ssl_set_options(ssl_ctx, OpenSSL.SSL_OP_NO_COMPRESSION)
     result = OpenSSL.ssl_set_alpn(ssl_ctx, OpenSSL.UPDATE_HTTP2_ALPN)
 
-    ssl_stream = SSLStream(ssl_ctx, tcp_stream, tcp_stream)
+    ssl_stream = SSLStream(ssl_ctx, tcp_stream)
 
     # TODO expose connect
     result = connect(ssl_stream)
